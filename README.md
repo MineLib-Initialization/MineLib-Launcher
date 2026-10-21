@@ -119,3 +119,17 @@
 
 自检：MineLibLauncher.exe --selftest 会把加载器版本列表、Modrinth 检索、一次 Fabric 安装的结果
 写到 %TEMP%\minelib-selftest.txt，不开界面。
+## 微软正版登录：当前不可用（微软侧限制）
+
+自己注册的 Azure 应用无法登录 Minecraft：`/authentication/login_with_xbox` 会返回
+
+```
+HTTP 403  {"path":"/authentication/login_with_xbox",
+           "errorMessage":"Invalid app registration, see https://aka.ms/AppRegInfo for more information"}
+```
+
+即使应用配置完全正确（个人账户受众 + 允许公共客户端流 + 设备码流程）也一样。
+微软现在只给获批的应用开这个口子，HMCL / Prism / PCL 用的是它们多年前获批的应用身份。
+整条链路的前三步（MSA 令牌 → Xbox Live → XSTS）在本项目里是通的，卡在最后一步。
+
+因此本启动器实际可用的是：**外置登录（authlib-injector + Yggdrasil）** 与 **离线**。

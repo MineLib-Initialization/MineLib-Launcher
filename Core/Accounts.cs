@@ -161,8 +161,9 @@ public static class MicrosoftAuth
         var text = ex.Message;
         if (step == "mc" && text.Contains("403"))
             return new AuthException(
-                "Xbox 拒绝了 Minecraft 登录（403）。常见原因是这个微软账号还没有 Xbox 档案：" +
-                "先用同一账号打开 xbox.com 登录一次、建好档案并接受条款；另外也需要拥有 Minecraft Java 版。");
+                "微软拒绝了这次登录（403）。这通常不是你的账号问题，而是微软没有批准这个启动器的应用身份：" +
+                "Minecraft 服务只接受获批的 Azure 应用（Invalid app registration）。" +
+                "请改用「离线」或「外置登录」，或在设置里换成你自己获批的 client id。");
         if (step == "mc" && text.Contains("401"))
             return new AuthException("Minecraft 登录被拒绝（401），这个微软账号可能没有 Minecraft Java 版。");
         if (step == "xsts")
