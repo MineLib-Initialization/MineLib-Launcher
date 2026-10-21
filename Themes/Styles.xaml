@@ -2,16 +2,18 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
   <!-- 调色板：中性灰 + 一个钢蓝强调色。无渐变、无阴影、无圆角堆叠。 -->
-  <Color x:Key="BgColor">#FFF4F4F5</Color>
+  <BooleanToVisibilityConverter x:Key="BoolToVis" />
+
+  <Color x:Key="BgColor">#FFF6F6F8</Color>
   <Color x:Key="PanelColor">#FFFFFFFF</Color>
-  <Color x:Key="BorderColor">#FFDCDCE0</Color>
-  <Color x:Key="TextColor">#FF1E1F23</Color>
-  <Color x:Key="TextDimColor">#FF6B6F76</Color>
-  <Color x:Key="TextFaintColor">#FF9A9DA4</Color>
+  <Color x:Key="BorderColor">#FFE1E1E5</Color>
+  <Color x:Key="TextColor">#FF191A1D</Color>
+  <Color x:Key="TextDimColor">#FF61646B</Color>
+  <Color x:Key="TextFaintColor">#FF8E9198</Color>
   <Color x:Key="AccentColor">#FF35618E</Color>
   <Color x:Key="AccentHoverColor">#FF2B5074</Color>
-  <Color x:Key="HoverColor">#FFEAEAEC</Color>
-  <Color x:Key="SelectedColor">#FFE3E9F1</Color>
+  <Color x:Key="HoverColor">#FFF2F2F4</Color>
+  <Color x:Key="SelectedColor">#FFE8EEF6</Color>
   <Color x:Key="OkColor">#FF2E7D4F</Color>
   <Color x:Key="WarnColor">#FF8A5B00</Color>
   <Color x:Key="ErrColor">#FFB42318</Color>
@@ -178,14 +180,22 @@
     <Setter Property="BorderBrush" Value="{StaticResource Border}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="3" />
-    <Setter Property="Padding" Value="14,12" />
+    <Setter Property="Padding" Value="16,14" />
   </Style>
 
   <Style x:Key="CardTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
     <Setter Property="FontSize" Value="12" />
     <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="Foreground" Value="{StaticResource TextDim}" />
+    <Setter Property="Foreground" Value="{StaticResource TextFaint}" />
     <Setter Property="Margin" Value="0,0,0,10" />
+    <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+  </Style>
+
+  <Style x:Key="Placeholder" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+    <Setter Property="Foreground" Value="{StaticResource TextFaint}" />
+    <Setter Property="IsHitTestVisible" Value="False" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Margin" Value="9,0,0,0" />
   </Style>
 
   <Style x:Key="KvLabel" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">

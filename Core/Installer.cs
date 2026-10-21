@@ -65,13 +65,59 @@ public static class Installer
         return string.IsNullOrEmpty(path) ? MavenPath(lib["name"]?.ToString() ?? "") : path;
     }
 
+    /// <summary>
+    /// 库的真实下载地址。官方 vanilla 库带 downloads.artifact.url；
+    /// Fabric / Forge / NeoForge 的库只有 url（maven 根）+ name，必须自己拼。
+    /// </summary>
+    public static string? LibUrl(JsonObject lib)
+    {
+        var art = lib["downloads"]?["artifact"];
+        if (art?["url"] is JsonNode u && !string.IsNullOrWhiteSpace(u.ToString())) return u.ToString();
+
+        var baseUrl = lib["url"]?.ToString();
+        if (string.IsNullOrWhiteSpace(baseUrl)) return null;
+        var path = LibPath(lib);
+        if (string.IsNullOrEmpty(path)) return null;
+        return baseUrl.TrimEnd('/') + "/" + path.Replace('\\', '/');
+    }
+
+    /// <summary>沿继承链找客户端 jar：继承版本的 jar 在父版本目录里。</summary>
+    public static string? FindClientJar(string gameDir, string vid)
+    {
+        var cur = vid;
+        var guard = 0;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (!string.IsNullOrEmpty(cur) && guard++ < 12 && seen.Add(cur))
+        {
+            var dir = Path.Combine(gameDir, "versions", cur);
+            foreach (var cand in new[] { Path.Combine(dir, cur + ".jar") })
+                if (File.Exists(cand)) return cand;
+            cur = Versions.LoadVersion(gameDir, cur)?["inheritsFrom"]?.ToString() ?? "";
+        }
+        return null;
+    }
+
+    /// <summary>下载客户端 jar 该落到哪：优先沿用已有的，否则落到最底层原版版本的目录。</summary>
+    public static string ClientJarDest(string gameDir, string vid)
+    {
+        var existing = FindClientJar(gameDir, vid);
+        if (existing is not null) return existing;
+        var cur = vid;
+        var guard = 0;
+        var rootId = vid;
+        while (!string.IsNullOrEmpty(cur) && guard++ < 12)
+        {
+            rootId = cur;
+            var parent = Versions.LoadVersion(gameDir, cur)?["inheritsFrom"]?.ToString();
+            if (string.IsNullOrEmpty(parent)) break;
+            cur = parent;
+        }
+        return Path.Combine(gameDir, "versions", rootId, rootId + ".jar");
+    }
+
     public static string ClientJarPath(string gameDir, string vid, JsonObject merged)
     {
-        var dir = Path.Combine(gameDir, "versions", vid);
-        var own = Path.Combine(dir, vid + ".jar");
-        if (File.Exists(own)) return own;
-        var alt = Path.Combine(dir, (merged["id"]?.ToString() ?? vid) + ".jar");
-        return File.Exists(alt) ? alt : own;
+        return FindClientJar(gameDir, vid) ?? ClientJarDest(gameDir, vid);
     }
 
     public sealed class MissingFiles
@@ -94,9 +140,8 @@ public static class Installer
             foreach (var node in libs)
             {
                 if (node is not JsonObject lib || !RuleAllows(lib)) continue;
-                var art = lib["downloads"]?["artifact"];
-                if (art is null) continue;
-                var path = art["path"]?.ToString() ?? MavenPath(lib["name"]?.ToString() ?? "");
+                if (LibUrl(lib) is null) continue;
+                var path = LibPath(lib);
                 if (path.Length == 0) continue;
                 if (!File.Exists(Path.Combine(gameDir, "libraries", path))) miss.Libraries.Add(lib);
             }
@@ -116,9 +161,8 @@ public static class Installer
     {
         var url = merged["downloads"]?["client"]?["url"]?.ToString();
         var sha1 = merged["downloads"]?["client"]?["sha1"]?.ToString();
-        var dest = ClientJarPath(gameDir, vid, merged);
-        if (string.IsNullOrEmpty(url))
-            return;
+        if (string.IsNullOrEmpty(url)) return;
+        var dest = ClientJarDest(gameDir, vid);
         await Http.DownloadAsync(url, dest, sha1, progress, ct).ConfigureAwait(false);
     }
 
@@ -131,13 +175,13 @@ public static class Installer
             foreach (var node in libs)
             {
                 if (node is not JsonObject lib || !RuleAllows(lib)) continue;
-                var art = lib["downloads"]?["artifact"];
-                var url = art?["url"]?.ToString();
-                if (string.IsNullOrEmpty(url)) continue;
-                var path = art!["path"]?.ToString() ?? MavenPath(lib["name"]?.ToString() ?? "");
+                var url = LibUrl(lib);
+                if (url is null) continue;
+                var path = LibPath(lib);
                 if (path.Length == 0) continue;
+                var art = lib["downloads"]?["artifact"];
                 tasks.Add(new Http.DownloadTask(url, Path.Combine(gameDir, "libraries", path),
-                    art["sha1"]?.ToString(), art["size"]?.GetValue<long>() ?? 0));
+                    art?["sha1"]?.ToString(), art?["size"]?.GetValue<long>() ?? 0));
             }
         }
         await Http.DownloadManyAsync(tasks, threads, Wrap(onProgress), ct).ConfigureAwait(false);

@@ -21,10 +21,10 @@
           <Button x:Name="BtnInstall" Content="安装新版本" Click="OnInstallClick" Margin="8,0,0,0" />
           <Button x:Name="BtnOpenDir" Content="打开游戏目录" Click="OnOpenDirClick" Margin="8,0,0,0" />
         </StackPanel>
-        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-          <TextBlock Text="搜索" Style="{StaticResource Dim}" VerticalAlignment="Center" Margin="0,0,8,0" />
-          <TextBox x:Name="TxtSearch" Width="230" Height="26" TextChanged="OnSearchChanged" />
-        </StackPanel>
+        <Grid HorizontalAlignment="Left" VerticalAlignment="Center">
+          <TextBox x:Name="TxtSearch" Width="248" Height="28" TextChanged="OnSearchChanged" />
+          <TextBlock x:Name="SearchPlaceholder" Text="搜索版本号或名称" Style="{StaticResource Placeholder}" />
+        </Grid>
       </DockPanel>
     </Border>
 
@@ -40,11 +40,21 @@
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
           </Grid.RowDefinitions>
-          <TextBlock Grid.Row="0" x:Name="LblVersionCount" Text="版本" Style="{StaticResource SectionTitle}"
-                     Margin="12,10,12,4" />
-          <ListBox Grid.Row="1" x:Name="VersionList" Background="Transparent" BorderThickness="0"
+          <StackPanel Grid.Row="0" Margin="12,10,12,8">
+            <TextBlock Text="客户端" Style="{StaticResource CardTitle}" Margin="0,0,0,6" />
+            <DockPanel LastChildFill="True">
+              <Button DockPanel.Dock="Right" Content="新建" Click="OnNewInstanceClick" Padding="9,2"
+                      Margin="6,0,0,0" />
+              <ComboBox x:Name="InstanceCombo" DisplayMemberPath="Display"
+                        SelectionChanged="OnInstanceChanged" />
+            </DockPanel>
+          </StackPanel>
+          <TextBlock Grid.Row="1" x:Name="LblVersionCount" Text="版本" Style="{StaticResource SectionTitle}"
+                     Margin="12,4,12,4" />
+          <ListBox Grid.Row="2" x:Name="VersionList" Background="Transparent" BorderThickness="0"
                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                    SelectionChanged="OnVersionSelected">
             <ListBox.ItemContainerStyle>
@@ -74,11 +84,23 @@
             </ListBox.ItemContainerStyle>
             <ListBox.ItemTemplate>
               <DataTemplate>
-                <StackPanel>
-                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                  <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Dim}" Margin="0,2,0,0"
-                             TextTrimming="CharacterEllipsis" />
-                </StackPanel>
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Dim}" Margin="0,2,0,0"
+                               TextTrimming="CharacterEllipsis" />
+                  </StackPanel>
+                  <Border Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0" Padding="6,2"
+                          CornerRadius="3" Background="{StaticResource Hover}"
+                          Visibility="{Binding HasLoaderBadge, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding LoaderBadge}" FontSize="10.5"
+                               Foreground="{StaticResource TextDim}" />
+                  </Border>
+                </Grid>
               </DataTemplate>
             </ListBox.ItemTemplate>
           </ListBox>
@@ -328,22 +350,21 @@
             </Grid>
           </TabItem>
 
-          <!-- 下载 -->
+          <!-- 下载 / 新建客户端 -->
           <TabItem Header="下载">
             <Grid Margin="8,10,4,8">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="304" />
+                <ColumnDefinition Width="320" />
               </Grid.ColumnDefinitions>
 
               <Grid Grid.Column="0" Margin="0,0,12,0">
                 <Grid.RowDefinitions>
                   <RowDefinition Height="Auto" />
                   <RowDefinition Height="*" />
-                  <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" x:Name="LblInstallHint"
-                           Text="从 Mojang 官方清单安装游戏版本。首次安装会下载依赖库与资源文件。"
+                           Text="选一个游戏版本，然后在右边创建全新客户端。新客户端有自己独立的目录、模组和存档，不会动到已有的客户端。"
                            Style="{StaticResource Dim}" Margin="0,0,0,8" TextWrapping="Wrap" />
                 <ListBox Grid.Row="1" x:Name="OfficialList" BorderBrush="{StaticResource Border}">
                   <ListBox.ItemTemplate>
@@ -358,38 +379,35 @@
                     </DataTemplate>
                   </ListBox.ItemTemplate>
                 </ListBox>
-                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
-                  <Button x:Name="BtnDoInstall" Content="安装选中版本" Click="OnDoInstallClick"
-                          Style="{StaticResource Primary}" Padding="14,5" />
-                  <Button Content="取消" Click="OnCancelClick" Padding="12,5" Margin="8,0,0,0" />
-                  <TextBlock x:Name="LblInstallStatus" Text="" Style="{StaticResource Dim}"
-                             VerticalAlignment="Center" Margin="12,0,0,0" />
-                </StackPanel>
               </Grid>
 
-              <!-- 加载器 -->
               <Border Grid.Column="1" Style="{StaticResource Card}" VerticalAlignment="Top">
                 <StackPanel>
-                  <TextBlock Text="安装模组加载器" Style="{StaticResource CardTitle}" />
-                  <TextBlock Text="装到当前游戏目录的 versions 里，装完自动打开 mods 文件夹。"
+                  <TextBlock Text="创建新客户端" Style="{StaticResource CardTitle}" />
+
+                  <TextBlock Text="客户端名称" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                  <TextBox x:Name="NewNameBox" Height="26" Margin="0,0,0,8" MaxLength="40" />
+
+                  <TextBlock Text="安装位置" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                  <DockPanel Margin="0,0,0,8">
+                    <Button DockPanel.Dock="Right" Content="浏览" Click="OnPickInstanceParentClick"
+                            Padding="9,3" Margin="6,0,0,0" />
+                    <TextBox x:Name="NewDirBox" Height="26" />
+                  </DockPanel>
+
+                  <TextBlock Text="模组加载器" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                  <ComboBox x:Name="NewLoaderCombo" Margin="0,0,0,10" />
+
+                  <TextBlock Text="会在「安装位置\客户端名称」下建一个完整的游戏目录：versions / libraries / assets / mods 全独立，装完自动切过去并打开文件夹。"
                              Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,0,0,10" />
 
-                  <TextBlock Text="加载器" Style="{StaticResource Dim}" Margin="0,0,0,4" />
-                  <ComboBox x:Name="LoaderCombo" Margin="0,0,0,8"
-                            SelectionChanged="OnLoaderKindChanged" />
-
-                  <TextBlock Text="目标 Minecraft 版本" Style="{StaticResource Dim}" Margin="0,0,0,4" />
-                  <ComboBox x:Name="TargetVersionCombo" Margin="0,0,0,8"
-                            SelectionChanged="OnLoaderTargetChanged" />
-
-                  <TextBlock Text="加载器版本" Style="{StaticResource Dim}" Margin="0,0,0,4" />
-                  <ComboBox x:Name="LoaderVersionCombo" Margin="0,0,0,10" DisplayMemberPath="Display" />
-
-                  <Button x:Name="BtnInstallLoader" Content="安装加载器" Click="OnInstallLoaderClick"
+                  <Button x:Name="BtnCreate" Content="创建新客户端" Click="OnCreateInstanceClick"
                           Style="{StaticResource Primary}" HorizontalAlignment="Stretch" Padding="12,6" />
-                  <ProgressBar x:Name="LoaderBar" Margin="0,10,0,0" Visibility="Collapsed" />
-                  <TextBlock x:Name="LblLoaderStatus" Text="" Style="{StaticResource Dim}" TextWrapping="Wrap"
+                  <ProgressBar x:Name="CreateBar" Margin="0,10,0,0" Visibility="Collapsed" />
+                  <TextBlock x:Name="LblCreateStatus" Text="" Style="{StaticResource Dim}" TextWrapping="Wrap"
                              Margin="0,8,0,0" />
+                  <Button x:Name="BtnCreateCancel" Content="取消" Click="OnCancelClick" Margin="0,8,0,0"
+                          HorizontalAlignment="Left" Padding="10,3" Visibility="Collapsed" />
                 </StackPanel>
               </Border>
             </Grid>
@@ -463,17 +481,16 @@
                           <ColumnDefinition Width="*" />
                           <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <Border Width="40" Height="40" CornerRadius="3" Background="{StaticResource Hover}"
-                                ClipToBounds="True" Margin="0,0,11,0" VerticalAlignment="Top">
+                        <Border Width="44" Height="44" CornerRadius="4" Background="{StaticResource Hover}"
+                                ClipToBounds="True" Margin="0,0,12,0" VerticalAlignment="Top">
                           <Image Source="{Binding IconUrl}" Stretch="UniformToFill" />
                         </Border>
                         <StackPanel Grid.Column="1">
                           <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                          <TextBlock Text="{Binding Description}" Style="{StaticResource Dim}"
-                                     TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
-                          <TextBlock Text="{Binding Meta}" Style="{StaticResource Dim}" FontSize="11"
-                                     Foreground="{StaticResource TextFaint}" Margin="0,3,0,0"
-                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding Description}" Style="{StaticResource Dim}" TextWrapping="Wrap"
+                                     MaxHeight="34" Margin="0,3,0,0" />
+                          <TextBlock Text="{Binding Meta}" FontSize="11" Foreground="{StaticResource TextFaint}"
+                                     Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                         <TextBlock Grid.Column="2" Text="{Binding DownloadsText}" Style="{StaticResource Mono}"
                                    Foreground="{StaticResource TextDim}" VerticalAlignment="Center"

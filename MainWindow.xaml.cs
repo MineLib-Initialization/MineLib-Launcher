@@ -42,8 +42,11 @@ public partial class MainWindow : Window
         ChkIsolation.IsChecked = _cfg.Isolation;
 
         ValGameDir.Text = _cfg.GameDir;
-        LoaderCombo.ItemsSource = Loaders.All.Select(Loaders.Label).ToList();
-        LoaderCombo.SelectedIndex = 0;
+        NewLoaderCombo.ItemsSource = new[] { "不装（纯原版）", "Fabric", "Quilt", "Forge", "NeoForge" };
+        NewLoaderCombo.SelectedIndex = 1;
+        NewDirBox.Text = Path.Combine(AppConfig.Dir, "instances");
+        NewNameBox.Text = "我的客户端";
+        RefreshInstanceCombo();
         ThreadsCombo.ItemsSource = new[] { 4, 8, 16, 32 };
         var savedThreads = Math.Clamp(_cfg.DownloadThreads, 4, 32);
         ThreadsCombo.SelectedItem = new[] { 4, 8, 16, 32 }.FirstOrDefault(t => t >= savedThreads);
@@ -86,8 +89,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        RefreshTargetVersions();
-
         var keep = _cfg.Version;
         _current = _all.FirstOrDefault(v => v.Id == keep) ?? _all[0];
         VersionList.SelectedItem = _current;
@@ -109,7 +110,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnSearchChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
+    private void OnSearchChanged(object sender, TextChangedEventArgs e)
+    {
+        SearchPlaceholder.Visibility = TxtSearch.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ApplyFilter();
+    }
 
     private void OnRefreshClick(object sender, RoutedEventArgs e)
     {
@@ -531,163 +536,58 @@ public partial class MainWindow : Window
         SetStatus("已删除账号 " + a.Name, false);
     }
 
-    // ---------------------------------------------------------------- 下载
-    // ---------------------------------------------------------------- 加载器
-    private void RefreshTargetVersions()
+    // ---------------------------------------------------------------- 客户端（独立实例）
+    private List<InstanceRef> _instanceItems = new();
+
+    private void RefreshInstanceCombo()
     {
+        if (_cfg.Instances.Count == 0)
+            _cfg.RegisterInstance("默认客户端", _cfg.GameDir);
+
         _loadingLoaderCombos = true;
         try
         {
-            // 加载器要的是「Minecraft 版本」，不是版本目录名（fabric-loader-x-1.21.1 这种要归一到 1.21.1）
-            var current = TargetVersionCombo.SelectedItem as string;
-            var items = new List<string>();
-            foreach (var v in _all)
-            {
-                var mc = string.IsNullOrEmpty(v.McVersion) ? v.Id : v.McVersion;
-                if (!string.IsNullOrEmpty(mc) && !items.Contains(mc)) items.Add(mc);
-            }
-            TargetVersionCombo.ItemsSource = items;
-            if (current is not null && items.Contains(current)) TargetVersionCombo.SelectedItem = current;
-            else if (_current is not null && items.Contains(_current.McVersion)) TargetVersionCombo.SelectedItem = _current.McVersion;
-            else if (items.Count > 0) TargetVersionCombo.SelectedIndex = 0;
+            _instanceItems = _cfg.Instances.ToList();
+            InstanceCombo.ItemsSource = null;
+            InstanceCombo.ItemsSource = _instanceItems;
+            var cur = _instanceItems.FirstOrDefault(i =>
+                string.Equals(i.Dir, _cfg.GameDir, StringComparison.OrdinalIgnoreCase));
+            if (cur is not null) InstanceCombo.SelectedItem = cur;
+            else if (_instanceItems.Count > 0) InstanceCombo.SelectedIndex = 0;
         }
         finally
         {
             _loadingLoaderCombos = false;
         }
-        _ = LoadLoaderVersionsAsync();
     }
 
-    private async void OnLoaderKindChanged(object sender, SelectionChangedEventArgs e)
+    private void OnInstanceChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_loadingLoaderCombos) return;
-        await LoadLoaderVersionsAsync();
+        if (InstanceCombo.SelectedItem is not InstanceRef inst) return;
+        if (string.Equals(inst.Dir, _cfg.GameDir, StringComparison.OrdinalIgnoreCase)) return;
+
+        _cfg.GameDir = inst.Dir;
+        _cfg.CurrentInstance = inst.Dir;
+        _cfg.Version = "";
+        _cfg.Save();
+        ValGameDir.Text = _cfg.GameDir;
+        RefreshVersions();
+        _ = DetectJavaAsync();
+        SetStatus("已切换到客户端「" + inst.Name + "」", false);
     }
 
-    private async void OnLoaderTargetChanged(object sender, SelectionChangedEventArgs e)
+    private void OnNewInstanceClick(object sender, RoutedEventArgs e)
     {
-        if (_loadingLoaderCombos) return;
-        await LoadLoaderVersionsAsync();
+        Tabs.SelectedIndex = 3;
+        SetStatus("在右边填名字选位置，点「创建新客户端」。", false);
     }
 
-    private async Task LoadLoaderVersionsAsync()
+    private void OnPickInstanceParentClick(object sender, RoutedEventArgs e)
     {
-        if (LoaderCombo.SelectedIndex < 0) return;
-        var kind = Loaders.All[LoaderCombo.SelectedIndex];
-
-        string? mc = TargetVersionCombo.SelectedItem as string;
-        if (kind == LoaderKind.LiteLoader)
-        {
-            try
-            {
-                var supported = await Loaders.LiteLoaderMinecraftVersionsAsync(CancellationToken.None);
-                var pick = supported.Contains(mc ?? "") ? mc : supported.LastOrDefault();
-                if (pick is not null)
-                {
-                    _loadingLoaderCombos = true;
-                    TargetVersionCombo.ItemsSource = supported;
-                    TargetVersionCombo.SelectedItem = pick;
-                    _loadingLoaderCombos = false;
-                    mc = pick;
-                }
-            }
-            catch (Exception ex)
-            {
-                LblLoaderStatus.Text = "读取 LiteLoader 版本失败：" + ex.Message;
-                return;
-            }
-        }
-
-        if (string.IsNullOrEmpty(mc))
-        {
-            LblLoaderStatus.Text = "先在左边装一个原版版本，或在上方选择目标版本。";
-            return;
-        }
-
-        LblLoaderStatus.Text = "读取 " + Loaders.Label(kind) + " 版本列表…";
-        try
-        {
-            _loaderVersions = await Loaders.VersionsAsync(kind, mc, CancellationToken.None);
-            LoaderVersionCombo.ItemsSource = _loaderVersions;
-            if (_loaderVersions.Count > 0) LoaderVersionCombo.SelectedIndex = 0;
-            LblLoaderStatus.Text = "已安装版本里可选 " + _loaderVersions.Count + " 个 " + Loaders.Label(kind) + " 构建。";
-        }
-        catch (Exception ex)
-        {
-            _loaderVersions = new List<LoaderVersion>();
-            LoaderVersionCombo.ItemsSource = null;
-            LblLoaderStatus.Text = "读取失败：" + ex.Message;
-        }
-    }
-
-    private async void OnInstallLoaderClick(object sender, RoutedEventArgs e)
-    {
-        if (LoaderCombo.SelectedIndex < 0 || TargetVersionCombo.SelectedItem is not string mc)
-        {
-            LblLoaderStatus.Text = "先选加载器和目标版本。";
-            return;
-        }
-        if (LoaderVersionCombo.SelectedItem is not LoaderVersion lv)
-        {
-            LblLoaderStatus.Text = "先选一个加载器版本。";
-            return;
-        }
-
-        var kind = Loaders.All[LoaderCombo.SelectedIndex];
-        if (Loaders.NeedsJava(kind))
-        {
-            if (string.IsNullOrEmpty(_javaExe)) await DetectJavaAsync();
-            if (string.IsNullOrEmpty(_javaExe))
-            {
-                LblLoaderStatus.Text = "这个加载器要用 Java 跑官方安装器，先装 Java 21（或在启动页指定 javaw.exe）。";
-                return;
-            }
-        }
-
-        BtnInstallLoader.IsEnabled = false;
-        LoaderBar.Visibility = Visibility.Visible;
-        LoaderBar.Value = 0;
-        _cts = new CancellationTokenSource();
-        var progress = new Progress<InstallProgress>(p =>
-        {
-            LblLoaderStatus.Text = p.Stage;
-            LoaderBar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
-        });
-
-        try
-        {
-            var id = await Loaders.InstallAsync(kind, mc, lv.Version, _cfg.GameDir, _javaExe, progress,
-                line => Dispatcher.BeginInvoke(() => AppendLog(line)), _cts.Token);
-
-            RefreshVersions();
-            if (!string.IsNullOrEmpty(id))
-            {
-                var found = _all.FirstOrDefault(v => v.Id == id);
-                if (found is not null)
-                {
-                    VersionList.SelectedItem = found;
-                    ShowVersion(found);
-                }
-            }
-            LblLoaderStatus.Text = string.IsNullOrEmpty(id)
-                ? "安装器已启动，按它窗口里的提示完成后点「刷新」。"
-                : "装好了：" + id + "。已打开 mods 文件夹。";
-            OpenModsFolder();
-        }
-        catch (OperationCanceledException)
-        {
-            LblLoaderStatus.Text = "已取消";
-        }
-        catch (Exception ex)
-        {
-            LblLoaderStatus.Text = "安装失败：" + ex.Message;
-            AppendLog("加载器安装失败：" + ex.Message);
-        }
-        finally
-        {
-            BtnInstallLoader.IsEnabled = true;
-            LoaderBar.Visibility = Visibility.Collapsed;
-        }
+        var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "选择安装位置（客户端会建在这个目录下）" };
+        if (Directory.Exists(NewDirBox.Text)) dlg.InitialDirectory = NewDirBox.Text;
+        if (dlg.ShowDialog() == true) NewDirBox.Text = dlg.FolderName;
     }
 
     // ---------------------------------------------------------------- mods 目录
@@ -860,7 +760,7 @@ public partial class MainWindow : Window
 
     private async Task LoadOfficialAsync()
     {
-        LblInstallStatus.Text = "读取官方版本清单…";
+        LblCreateStatus.Text = "读取官方版本清单…";
         try
         {
             var manifest = await Http.GetJsonAsync(Installer.ManifestUrl);
@@ -883,43 +783,124 @@ public partial class MainWindow : Window
             _official = list;
             OfficialList.ItemsSource = _official;
             OfficialList.SelectedIndex = 0;
-            LblInstallStatus.Text = "列出最近 " + _official.Count + " 个版本";
+            LblCreateStatus.Text = "列出最近 " + _official.Count + " 个版本";
         }
         catch (Exception ex)
         {
-            LblInstallStatus.Text = "读取清单失败：" + ex.Message;
+            LblCreateStatus.Text = "读取清单失败：" + ex.Message;
         }
     }
 
-    private async void OnDoInstallClick(object sender, RoutedEventArgs e)
+    private async void OnCreateInstanceClick(object sender, RoutedEventArgs e)
     {
-        if (OfficialList.SelectedItem is not OfficialVersion v) return;
-        BtnDoInstall.IsEnabled = false;
-        Bar.Visibility = Visibility.Visible;
+        if (OfficialList.SelectedItem is not OfficialVersion v)
+        {
+            LblCreateStatus.Text = "先在左边选一个游戏版本。";
+            return;
+        }
+
+        var name = NewNameBox.Text.Trim();
+        if (name.Length == 0)
+        {
+            LblCreateStatus.Text = "给客户端起个名字。";
+            return;
+        }
+        name = string.Concat(name.Split(Path.GetInvalidFileNameChars()));
+        var parent = NewDirBox.Text.Trim();
+        if (parent.Length == 0)
+        {
+            LblCreateStatus.Text = "选一个安装位置。";
+            return;
+        }
+
+        var dir = Path.Combine(parent, name);
+        if (Directory.Exists(dir) && Directory.GetFileSystemEntries(dir).Length > 0)
+        {
+            LblCreateStatus.Text = "目录 " + dir + " 里已经有东西了。换个名字或位置——不会往已有客户端里塞东西。";
+            return;
+        }
+
+        var loaderLabel = NewLoaderCombo.SelectedItem as string ?? "不装（纯原版）";
+        var kind = loaderLabel switch
+        {
+            "Fabric" => (LoaderKind?)LoaderKind.Fabric,
+            "Quilt" => LoaderKind.Quilt,
+            "Forge" => LoaderKind.Forge,
+            "NeoForge" => LoaderKind.NeoForge,
+            _ => null
+        };
+
+        string javaExe = "";
+        if (kind is not null && Loaders.NeedsJava(kind.Value))
+        {
+            if (string.IsNullOrEmpty(_javaExe)) await DetectJavaAsync();
+            if (string.IsNullOrEmpty(_javaExe))
+            {
+                LblCreateStatus.Text = "Forge / NeoForge 要用 Java 跑官方安装器，先装 Java 21。";
+                return;
+            }
+            javaExe = _javaExe;
+        }
+
+        BtnCreate.IsEnabled = false;
+        BtnCreateCancel.Visibility = Visibility.Visible;
+        CreateBar.Visibility = Visibility.Visible;
+        CreateBar.Value = 0;
         _cts = new CancellationTokenSource();
+        var progress = new Progress<InstallProgress>(p =>
+        {
+            LblCreateStatus.Text = p.Stage;
+            CreateBar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
+        });
+
         try
         {
-            var progress = new Progress<InstallProgress>(p =>
+            Directory.CreateDirectory(dir);
+            LblCreateStatus.Text = "创建 " + dir + " …";
+            await Installer.InstallVersionAsync(dir, v.Id, _cfg.DownloadThreads, progress, _cts.Token);
+
+            var note = v.Id;
+            var installedId = v.Id;
+            if (kind is not null)
             {
-                LblInstallStatus.Text = p.Stage;
-                Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
-            });
-            await Installer.InstallVersionAsync(_cfg.GameDir, v.Id, _cfg.DownloadThreads, progress, _cts.Token);
-            LblInstallStatus.Text = "已安装 " + v.Id;
+                var versions = await Loaders.VersionsAsync(kind.Value, v.Id, _cts.Token);
+                var lv = versions.FirstOrDefault(x => x.Channel == "稳定") ?? versions.FirstOrDefault();
+                if (lv is null)
+                    throw new InvalidOperationException("这个游戏版本没有可用的 " + loaderLabel + " 构建。");
+                var madeId = await Loaders.InstallAsync(kind.Value, v.Id, lv.Version, dir, javaExe, progress,
+                    line => Dispatcher.BeginInvoke(() => AppendLog(line)), _cts.Token);
+                if (!string.IsNullOrEmpty(madeId)) installedId = madeId;
+                note = v.Id + " · " + loaderLabel;
+            }
+
+            var inst = _cfg.RegisterInstance(name, dir, note);
+            ValGameDir.Text = _cfg.GameDir;
+            RefreshInstanceCombo();
+            InstanceCombo.SelectedItem = _instanceItems.FirstOrDefault(x => x.Dir == dir) ?? inst;
             RefreshVersions();
+            var made = _all.FirstOrDefault(x => x.Id == installedId);
+            if (made is not null)
+            {
+                VersionList.SelectedItem = made;
+                ShowVersion(made);
+            }
+            LblCreateStatus.Text = "创建完成：" + name + "（" + note + "）。已切到这个客户端。";
+            OpenFolder(dir);
         }
         catch (OperationCanceledException)
         {
-            LblInstallStatus.Text = "已取消";
+            LblCreateStatus.Text = "已取消（这个目录里已下载的文件会保留，下次同名创建会跳过它们）。";
         }
         catch (Exception ex)
         {
-            LblInstallStatus.Text = "安装失败：" + ex.Message;
+            LblCreateStatus.Text = "创建失败：" + ex.Message;
+            AppendLog("创建客户端失败：" + ex.Message);
         }
         finally
         {
-            BtnDoInstall.IsEnabled = true;
-            Bar.Visibility = Visibility.Collapsed;
+            BtnCreate.IsEnabled = true;
+            BtnCreateCancel.Visibility = Visibility.Collapsed;
+            CreateBar.Visibility = Visibility.Collapsed;
         }
     }
 

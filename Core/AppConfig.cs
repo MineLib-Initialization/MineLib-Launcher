@@ -4,6 +4,16 @@ using System.Text.Json.Nodes;
 
 namespace MineLib.Core;
 
+/// <summary>一个独立客户端：自己的目录、自己的 versions / mods / 存档。</summary>
+public sealed class InstanceRef
+{
+    public string Name { get; set; } = "";
+    public string Dir { get; set; } = "";
+    public string Note { get; set; } = "";
+
+    public string Display => string.IsNullOrEmpty(Note) ? Name : Name + "  ·  " + Note;
+}
+
 /// <summary>启动器配置，存 %APPDATA%\MineLib\config.json。</summary>
 public sealed class AppConfig
 {
@@ -24,6 +34,9 @@ public sealed class AppConfig
     public bool Isolation { get; set; } = true;
     public string AzureClientId { get; set; } = "";
     public string LastAccountKey { get; set; } = "";
+    /// <summary>客户端（游戏实例）列表：每个实例是一个独立的 .minecraft 目录。</summary>
+    public List<InstanceRef> Instances { get; set; } = new();
+    public string CurrentInstance { get; set; } = "";
     public List<Account> Accounts { get; set; } = new();
 
     public static AppConfig Load()
@@ -40,6 +53,7 @@ public sealed class AppConfig
                         cfg.GameDir = Path.Combine(
                             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft");
                     cfg.Accounts ??= new List<Account>();
+                    cfg.Instances ??= new List<InstanceRef>();
                     return cfg;
                 }
             }
@@ -63,6 +77,29 @@ public sealed class AppConfig
         catch (Exception)
         {
         }
+    }
+
+    public InstanceRef? CurrentInstanceRef =>
+        Instances.FirstOrDefault(i => i.Dir == GameDir) ?? Instances.FirstOrDefault();
+
+    /// <summary>注册一个客户端目录；已存在就复用。</summary>
+    public InstanceRef RegisterInstance(string name, string dir, string note = "")
+    {
+        var found = Instances.FirstOrDefault(i => string.Equals(i.Dir, dir, StringComparison.OrdinalIgnoreCase));
+        if (found is not null)
+        {
+            found.Name = name;
+            found.Note = note;
+        }
+        else
+        {
+            found = new InstanceRef { Name = name, Dir = dir, Note = note };
+            Instances.Add(found);
+        }
+        GameDir = dir;
+        CurrentInstance = dir;
+        Save();
+        return found;
     }
 
     public Account? CurrentAccount =>

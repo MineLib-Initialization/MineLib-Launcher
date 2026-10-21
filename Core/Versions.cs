@@ -19,6 +19,12 @@ public sealed class VersionInfo
 
     public string Title => Id;
 
+    public string LoaderBadge => Loader == "原版" ? "" : Loader;
+
+    public bool HasLoaderBadge => Loader != "原版";
+
+    public string ModsText => Mods > 0 ? Mods + " mods" : "";
+
     public string Subtitle
     {
         get

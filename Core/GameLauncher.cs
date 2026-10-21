@@ -63,8 +63,8 @@ public static class GameLauncher
                 if (File.Exists(full)) classpath.Add(full);
             }
         }
-        var jar = Installer.ClientJarPath(gameDir, vid, merged);
-        if (File.Exists(jar)) classpath.Add(jar);
+        var jar = Installer.FindClientJar(gameDir, vid);
+        if (jar is not null) classpath.Add(jar);
 
         var sep = OperatingSystem.IsWindows() ? ";" : ":";
         var table = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -165,7 +165,11 @@ public static class GameLauncher
 
     private static string Substitute(string text, Dictionary<string, string> table)
     {
-        foreach (var kv in table) text = text.Replace(" + kv.Key + ", kv.Value);
+        foreach (var kv in table)
+        {
+            var token = "$" + "{" + kv.Key + "}";
+            text = text.Replace(token, kv.Value);
+        }
         return text;
     }
 
