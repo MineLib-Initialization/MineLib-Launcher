@@ -1,0 +1,378 @@
+<Window x:Class="MineLib.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="MineLib 启动器" Height="700" Width="1060" MinHeight="540" MinWidth="860"
+        Background="{StaticResource Bg}" WindowStartupLocation="CenterScreen"
+        TextOptions.TextFormattingMode="Display">
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <!-- 工具栏 -->
+    <Border Grid.Row="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}"
+            BorderThickness="0,0,0,1" Padding="12,9">
+      <DockPanel LastChildFill="True">
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <Button x:Name="BtnRefresh" Content="刷新" Click="OnRefreshClick" />
+          <Button x:Name="BtnInstall" Content="安装新版本" Click="OnInstallClick" Margin="8,0,0,0" />
+          <Button x:Name="BtnOpenDir" Content="打开游戏目录" Click="OnOpenDirClick" Margin="8,0,0,0" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="搜索" Style="{StaticResource Dim}" VerticalAlignment="Center" Margin="0,0,8,0" />
+          <TextBox x:Name="TxtSearch" Width="230" Height="26" TextChanged="OnSearchChanged" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <!-- 主体 -->
+    <Grid Grid.Row="1">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="272" />
+        <ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
+
+      <Border Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}"
+              BorderThickness="0,0,1,0">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+          <TextBlock Grid.Row="0" x:Name="LblVersionCount" Text="版本" Style="{StaticResource SectionTitle}"
+                     Margin="12,10,12,4" />
+          <ListBox Grid.Row="1" x:Name="VersionList" Background="Transparent" BorderThickness="0"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                   SelectionChanged="OnVersionSelected">
+            <ListBox.ItemContainerStyle>
+              <Style TargetType="ListBoxItem">
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Template">
+                  <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                      <Border x:Name="bd" Background="Transparent" BorderThickness="2,0,0,0"
+                              BorderBrush="Transparent" Padding="10,7">
+                        <ContentPresenter />
+                      </Border>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                          <Setter TargetName="bd" Property="Background" Value="{StaticResource Hover}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                          <Setter TargetName="bd" Property="Background" Value="{StaticResource Selected}" />
+                          <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}" />
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </Setter.Value>
+                </Setter>
+              </Style>
+            </ListBox.ItemContainerStyle>
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <StackPanel>
+                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Dim}" Margin="0,2,0,0"
+                             TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Grid>
+      </Border>
+
+      <Grid Grid.Column="1">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Padding="16,12" Background="Transparent">
+          <DockPanel LastChildFill="True">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+              <Button x:Name="BtnStop" Content="停止" Click="OnStopClick" Visibility="Collapsed"
+                      Margin="0,0,8,0" Style="{StaticResource Danger}" />
+              <Button x:Name="BtnLaunch" Content="启动游戏" Click="OnLaunchClick"
+                      Style="{StaticResource Primary}" MinWidth="104" Padding="16,7" />
+            </StackPanel>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock x:Name="LblVersionName" Text="未选择版本" FontSize="17" FontWeight="SemiBold" />
+              <TextBlock x:Name="LblVersionSub" Text="" Style="{StaticResource Dim}" Margin="0,3,0,0" />
+            </StackPanel>
+          </DockPanel>
+        </Border>
+
+        <TabControl Grid.Row="1" x:Name="Tabs" Background="Transparent" BorderThickness="0"
+                    Margin="8,0,8,8" SelectionChanged="OnTabChanged">
+          <TabControl.Resources>
+            <Style TargetType="TabPanel">
+              <Setter Property="Margin" Value="8,0,0,0" />
+            </Style>
+          </TabControl.Resources>
+
+          <!-- 启动主页 -->
+          <TabItem Header="启动">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="8,10,4,0">
+              <Grid Margin="8,4,8,16">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="292" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                  <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                    <StackPanel>
+                      <TextBlock Text="游戏版本" Style="{StaticResource CardTitle}" />
+                      <TextBlock x:Name="ValMcVersion" Text="-" FontSize="22" FontWeight="SemiBold" />
+                      <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                        <TextBlock x:Name="ValLoader" Text="-" Style="{StaticResource Dim}" />
+                        <TextBlock x:Name="ValMods" Text="-" Style="{StaticResource Dim}" Margin="10,0,0,0" />
+                      </StackPanel>
+                      <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto" />
+                          <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                          <RowDefinition Height="Auto" />
+                          <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="客户端" Style="{StaticResource KvLabel}" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" x:Name="ValJar" Text="-" Style="{StaticResource Mono}"
+                                   TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="目录" Style="{StaticResource KvLabel}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="ValDir" Text="-" Style="{StaticResource Mono}"
+                                   TextTrimming="CharacterEllipsis" />
+                      </Grid>
+                    </StackPanel>
+                  </Border>
+
+                  <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                    <StackPanel>
+                      <TextBlock Text="账号" Style="{StaticResource CardTitle}" />
+                      <TextBlock x:Name="ValAccount" Text="未登录" FontSize="15" Margin="0,0,0,3" />
+                      <TextBlock x:Name="ValAccountNote2" Text="" Style="{StaticResource Dim}" TextWrapping="Wrap" />
+                      <Button Content="管理账号" Click="OnGoAccountClick" HorizontalAlignment="Left"
+                              Margin="0,10,0,0" Padding="12,4" />
+                    </StackPanel>
+                  </Border>
+
+                  <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                      <DockPanel Margin="0,0,0,8">
+                        <Button DockPanel.Dock="Right" Content="打开日志" Click="OnOpenLogFileClick" Padding="10,3" />
+                        <TextBlock Text="最近日志" Style="{StaticResource CardTitle}" Margin="0" />
+                      </DockPanel>
+                      <TextBlock x:Name="TxtHomeLog" Text="还没有启动记录。" Style="{StaticResource Mono}"
+                                 Foreground="{StaticResource TextDim}" TextWrapping="NoWrap"
+                                 TextTrimming="CharacterEllipsis" Height="72" />
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1">
+                  <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                    <StackPanel>
+                      <TextBlock Text="快捷入口" Style="{StaticResource CardTitle}" />
+                      <Button Content="打开游戏目录" Click="OnOpenDirClick" HorizontalAlignment="Stretch"
+                              Margin="0,0,0,6" />
+                      <Button Content="打开版本目录" Click="OnOpenVersionDirClick" HorizontalAlignment="Stretch"
+                              Margin="0,0,0,6" />
+                      <Button Content="安装新版本" Click="OnInstallClick" HorizontalAlignment="Stretch"
+                              Margin="0,0,0,6" />
+                      <Button Content="查看完整日志" Click="OnGoLogClick" HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                  </Border>
+
+                  <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                    <StackPanel>
+                      <TextBlock Text="运行环境" Style="{StaticResource CardTitle}" />
+                      <TextBlock x:Name="ValJava" Text="检测中…" Style="{StaticResource Mono}"
+                                 TextTrimming="CharacterEllipsis" Margin="0,0,0,8" />
+                      <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="内存" Style="{StaticResource KvLabel}" />
+                        <TextBox x:Name="TxtMemory" Width="74" Height="24" />
+                        <TextBlock Text="MB" Style="{StaticResource Dim}" VerticalAlignment="Center"
+                                   Margin="6,0,0,0" />
+                      </StackPanel>
+                      <CheckBox x:Name="ChkIsolation" Content="版本隔离" Click="OnIsolationChanged"
+                                Margin="0,0,0,8" />
+                      <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button Content="选择 Java" Click="OnPickJavaClick" Padding="10,3" Margin="0,0,6,0" />
+                        <Button Content="更改目录" Click="OnPickGameDirClick" Padding="10,3" />
+                      </StackPanel>
+                      <TextBlock Text="附加 JVM 参数" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                      <TextBox x:Name="TxtJvm" Height="24" LostFocus="OnJvmChanged" />
+                      <TextBlock Text="游戏目录" Style="{StaticResource Dim}" Margin="0,10,0,4" />
+                      <TextBlock x:Name="ValGameDir" Text="-" Style="{StaticResource Mono}" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+              </Grid>
+            </ScrollViewer>
+          </TabItem>
+
+          <!-- 账号 -->
+          <TabItem Header="账号">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="8,10,4,0">
+              <StackPanel Margin="8,4,8,16">
+                <TextBlock Text="当前账号" Style="{StaticResource SectionTitle}" />
+                <TextBlock x:Name="ValAccountBig" Text="未登录" FontSize="15" Margin="0,0,0,4" />
+                <TextBlock x:Name="ValAccountNote" Text="没有账号时只能用离线模式启动" Style="{StaticResource Dim}"
+                           Margin="0,0,0,14" />
+
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                  <RadioButton x:Name="RbMicrosoft" Content="微软正版" GroupName="login"
+                               Checked="OnLoginModeChanged" />
+                  <RadioButton x:Name="RbYggdrasil" Content="外置登录" GroupName="login"
+                               Checked="OnLoginModeChanged" />
+                  <RadioButton x:Name="RbOffline" Content="离线" GroupName="login" IsChecked="True"
+                               Checked="OnLoginModeChanged" />
+                </StackPanel>
+
+                <Border x:Name="PanelMicrosoft" Style="{StaticResource Card}" Visibility="Collapsed">
+                  <StackPanel>
+                    <TextBlock Text="用正版账号登录后，进正版服、皮肤、Realms 都正常。登录一次长期有效，过期会自动续期。"
+                               Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,0,0,10" />
+                    <StackPanel Orientation="Horizontal">
+                      <Button x:Name="BtnMsLogin" Content="用 Microsoft 账号登录" Click="OnMsLoginClick"
+                              Style="{StaticResource Primary}" Padding="14,5" />
+                      <TextBlock x:Name="LblMsCode" Text="" Style="{StaticResource Mono}"
+                                 VerticalAlignment="Center" Margin="12,0,0,0" />
+                    </StackPanel>
+                    <TextBlock x:Name="LblMsStatus" Text="" Style="{StaticResource Dim}" TextWrapping="Wrap"
+                               Margin="0,8,0,0" />
+                  </StackPanel>
+                </Border>
+
+                <Border x:Name="PanelYggdrasil" Style="{StaticResource Card}" Visibility="Collapsed">
+                  <StackPanel>
+                    <TextBlock Text="API 地址" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                    <TextBox x:Name="TxtYggApi" Height="26" Margin="0,0,0,8"
+                             Text="https://littleskin.cn/api/yggdrasil" />
+                    <TextBlock Text="用户名" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                    <TextBox x:Name="TxtYggUser" Height="26" Margin="0,0,0,8" />
+                    <TextBlock Text="密码" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                    <PasswordBox x:Name="TxtYggPass" Height="26" Margin="0,0,0,10" />
+                    <StackPanel Orientation="Horizontal">
+                      <Button x:Name="BtnYggLogin" Content="登录" Click="OnYggLoginClick"
+                              Style="{StaticResource Primary}" Padding="14,5" />
+                      <TextBlock x:Name="LblYggStatus" Text="" Style="{StaticResource Dim}"
+                                 VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <TextBlock Text="外置登录会在启动时注入 authlib-injector（首次自动下载），皮肤与披风来自该服务器。"
+                               Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                  </StackPanel>
+                </Border>
+
+                <Border x:Name="PanelOffline" Style="{StaticResource Card}">
+                  <StackPanel>
+                    <TextBlock Text="玩家名" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                    <TextBox x:Name="TxtOfflineName" Height="26" Margin="0,0,0,10" MaxLength="16" />
+                    <StackPanel Orientation="Horizontal">
+                      <Button x:Name="BtnOfflineUse" Content="使用这个名字" Click="OnOfflineClick"
+                              Style="{StaticResource Primary}" Padding="14,5" />
+                      <TextBlock Text="离线不向 Mojang 认证；服务器必须开了 offline-mode 才进得去。"
+                                 Style="{StaticResource Dim}" VerticalAlignment="Center" Margin="12,0,0,0" />
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+
+                <TextBlock Text="已保存的账号" Style="{StaticResource SectionTitle}" Margin="0,16,0,6" />
+                <ListBox x:Name="AccountList" Height="104" BorderBrush="{StaticResource Border}">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate>
+                      <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding Summary}" />
+                        <TextBlock Text="{Binding Uuid}" Style="{StaticResource Mono}"
+                                   Foreground="{StaticResource TextFaint}" Margin="10,0,0,0" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                  <Button Content="使用选中账号" Click="OnUseAccountClick" Padding="12,4" />
+                  <Button Content="删除" Click="OnDeleteAccountClick" Padding="12,4" Margin="8,0,0,0"
+                          Style="{StaticResource Danger}" />
+                </StackPanel>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+
+          <!-- 日志 -->
+          <TabItem Header="日志">
+            <Grid Margin="8,10,4,8">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+              </Grid.RowDefinitions>
+              <TextBox Grid.Row="0" x:Name="TxtLog" IsReadOnly="True" AcceptsReturn="True"
+                       FontFamily="{StaticResource MonoFont}" FontSize="12"
+                       VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                       TextWrapping="NoWrap" Background="#FF1E1F23" Foreground="#FFD6D6D8"
+                       BorderBrush="{StaticResource Border}" />
+              <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                <Button Content="清空" Click="OnClearLogClick" Padding="12,4" />
+                <Button Content="打开日志文件" Click="OnOpenLogFileClick" Padding="12,4" Margin="8,0,0,0" />
+                <TextBlock x:Name="LblLogPath" Text="" Style="{StaticResource Dim}" VerticalAlignment="Center"
+                           Margin="12,0,0,0" TextTrimming="CharacterEllipsis" />
+              </StackPanel>
+            </Grid>
+          </TabItem>
+
+          <!-- 下载 -->
+          <TabItem Header="下载">
+            <Grid Margin="8,10,4,8">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+              </Grid.RowDefinitions>
+              <TextBlock Grid.Row="0" x:Name="LblInstallHint"
+                         Text="从 Mojang 官方清单安装游戏版本。首次安装会下载依赖库与资源文件。"
+                         Style="{StaticResource Dim}" Margin="0,0,0,8" TextWrapping="Wrap" />
+              <ListBox Grid.Row="1" x:Name="OfficialList" BorderBrush="{StaticResource Border}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock Text="{Binding Id}" Width="170" FontWeight="SemiBold" />
+                      <TextBlock Text="{Binding Type}" Width="90" Style="{StaticResource Dim}"
+                                 VerticalAlignment="Center" />
+                      <TextBlock Text="{Binding ReleaseTime}" Style="{StaticResource Dim}"
+                                 VerticalAlignment="Center" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                <Button x:Name="BtnDoInstall" Content="安装选中版本" Click="OnDoInstallClick"
+                        Style="{StaticResource Primary}" Padding="14,5" />
+                <Button Content="取消" Click="OnCancelClick" Padding="12,5" Margin="8,0,0,0" />
+                <TextBlock x:Name="LblInstallStatus" Text="" Style="{StaticResource Dim}"
+                           VerticalAlignment="Center" Margin="12,0,0,0" />
+              </StackPanel>
+            </Grid>
+          </TabItem>
+        </TabControl>
+      </Grid>
+    </Grid>
+
+    <!-- 状态栏 -->
+    <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}"
+            BorderThickness="0,1,0,0" Padding="12,5">
+      <DockPanel LastChildFill="True">
+        <TextBlock x:Name="LblStatusRight" DockPanel.Dock="Right" Style="{StaticResource Dim}"
+                   VerticalAlignment="Center" />
+        <StackPanel Orientation="Horizontal">
+          <TextBlock x:Name="LblStatus" Text="就绪" Style="{StaticResource Dim}" VerticalAlignment="Center" />
+          <ProgressBar x:Name="Bar" Width="140" Height="4" Margin="12,0,0,0" VerticalAlignment="Center"
+                       Visibility="Collapsed" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+  </Grid>
+</Window>

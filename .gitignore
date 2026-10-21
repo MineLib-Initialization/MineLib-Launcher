@@ -1,0 +1,12 @@
+# build output
+bin/
+obj/
+*.user
+.vs/
+
+# 本地覆盖：exe 同目录的 client id（公开发布版把 id 写进 MicrosoftAuth.DefaultClientId）
+clientid.txt
+
+# 发布产物
+publish/
+*.zip
