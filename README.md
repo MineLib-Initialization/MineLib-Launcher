@@ -25,6 +25,17 @@
 
 ### 微软登录：维护者一次性配置（用户无感）
 
+一条命令搞定（会弹浏览器让你登录，脚本不碰你的密码）：
+
+	powershell -ExecutionPolicy Bypass -File .\setup-azure-clientid.ps1
+
+脚本做四件事：检查/安装 Azure CLI → 让你在浏览器里登录 → 创建名为 \`MineLib Launcher\` 的应用
+（sign-in audience 为 PersonalMicrosoftAccount，并打开 isFallbackPublicClient，即设备码必需的「允许公共客户端流」）
+→ 把 client id 写进 \`clientid.txt\` 和 \`Core/Accounts.cs\` 的 \`DefaultClientId\`。
+跑完重新 \`dotnet publish\` 即可，终端用户零配置。
+
+手动做也可以（门户路径）：
+
 微软要求请求方必须是一个已注册的应用，所以 client id 只能由发布者带在程序里 —— HMCL、Prism 都是这么做的，
 这个 id 是公开信息，不是密钥。
 
