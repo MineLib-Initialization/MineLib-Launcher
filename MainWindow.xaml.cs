@@ -22,6 +22,13 @@ public partial class MainWindow : Window
     private GameProcess? _proc;
     private CancellationTokenSource? _cts;
     private string _logPath = "";
+    private bool _loadingLoaderCombos;
+    private List<LoaderVersion> _loaderVersions = new();
+    private List<ModHit> _modHits = new();
+    private List<ModFile> _modFiles = new();
+    private long _modTotal;
+    private int _modOffset;
+    private bool _modInited;
 
 
     public sealed record OfficialVersion(string Id, string Type, string ReleaseTime);
@@ -35,11 +42,13 @@ public partial class MainWindow : Window
         ChkIsolation.IsChecked = _cfg.Isolation;
 
         ValGameDir.Text = _cfg.GameDir;
+        LoaderCombo.ItemsSource = Loaders.All.Select(Loaders.Label).ToList();
+        LoaderCombo.SelectedIndex = 0;
         LblStatusRight.Text = "MineLib 0.1";
         Bar.Visibility = Visibility.Collapsed;
         // 调试：MINELIB_TAB=1/2/3 直接打开账号/日志/下载页，便于离屏核对
         if (int.TryParse(Environment.GetEnvironmentVariable("MINELIB_TAB"), out var startTab))
-            Tabs.SelectedIndex = Math.Clamp(startTab, 0, 3);
+            Tabs.SelectedIndex = Math.Clamp(startTab, 0, 4);
         switch (Environment.GetEnvironmentVariable("MINELIB_ACCOUNT"))
         {
             case "ms": RbMicrosoft.IsChecked = true; break;
@@ -73,10 +82,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        RefreshTargetVersions();
+
         var keep = _cfg.Version;
         _current = _all.FirstOrDefault(v => v.Id == keep) ?? _all[0];
         VersionList.SelectedItem = _current;
         ShowVersion(_current);
+        if (Tabs.SelectedIndex == 4) InitModTab();
     }
 
     private void ApplyFilter()
@@ -506,11 +518,330 @@ public partial class MainWindow : Window
     }
 
     // ---------------------------------------------------------------- 下载
+    // ---------------------------------------------------------------- 加载器
+    private void RefreshTargetVersions()
+    {
+        _loadingLoaderCombos = true;
+        try
+        {
+            // 加载器要的是「Minecraft 版本」，不是版本目录名（fabric-loader-x-1.21.1 这种要归一到 1.21.1）
+            var current = TargetVersionCombo.SelectedItem as string;
+            var items = new List<string>();
+            foreach (var v in _all)
+            {
+                var mc = string.IsNullOrEmpty(v.McVersion) ? v.Id : v.McVersion;
+                if (!string.IsNullOrEmpty(mc) && !items.Contains(mc)) items.Add(mc);
+            }
+            TargetVersionCombo.ItemsSource = items;
+            if (current is not null && items.Contains(current)) TargetVersionCombo.SelectedItem = current;
+            else if (_current is not null && items.Contains(_current.McVersion)) TargetVersionCombo.SelectedItem = _current.McVersion;
+            else if (items.Count > 0) TargetVersionCombo.SelectedIndex = 0;
+        }
+        finally
+        {
+            _loadingLoaderCombos = false;
+        }
+        _ = LoadLoaderVersionsAsync();
+    }
+
+    private async void OnLoaderKindChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingLoaderCombos) return;
+        await LoadLoaderVersionsAsync();
+    }
+
+    private async void OnLoaderTargetChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingLoaderCombos) return;
+        await LoadLoaderVersionsAsync();
+    }
+
+    private async Task LoadLoaderVersionsAsync()
+    {
+        if (LoaderCombo.SelectedIndex < 0) return;
+        var kind = Loaders.All[LoaderCombo.SelectedIndex];
+
+        string? mc = TargetVersionCombo.SelectedItem as string;
+        if (kind == LoaderKind.LiteLoader)
+        {
+            try
+            {
+                var supported = await Loaders.LiteLoaderMinecraftVersionsAsync(CancellationToken.None);
+                var pick = supported.Contains(mc ?? "") ? mc : supported.LastOrDefault();
+                if (pick is not null)
+                {
+                    _loadingLoaderCombos = true;
+                    TargetVersionCombo.ItemsSource = supported;
+                    TargetVersionCombo.SelectedItem = pick;
+                    _loadingLoaderCombos = false;
+                    mc = pick;
+                }
+            }
+            catch (Exception ex)
+            {
+                LblLoaderStatus.Text = "读取 LiteLoader 版本失败：" + ex.Message;
+                return;
+            }
+        }
+
+        if (string.IsNullOrEmpty(mc))
+        {
+            LblLoaderStatus.Text = "先在左边装一个原版版本，或在上方选择目标版本。";
+            return;
+        }
+
+        LblLoaderStatus.Text = "读取 " + Loaders.Label(kind) + " 版本列表…";
+        try
+        {
+            _loaderVersions = await Loaders.VersionsAsync(kind, mc, CancellationToken.None);
+            LoaderVersionCombo.ItemsSource = _loaderVersions;
+            if (_loaderVersions.Count > 0) LoaderVersionCombo.SelectedIndex = 0;
+            LblLoaderStatus.Text = "已安装版本里可选 " + _loaderVersions.Count + " 个 " + Loaders.Label(kind) + " 构建。";
+        }
+        catch (Exception ex)
+        {
+            _loaderVersions = new List<LoaderVersion>();
+            LoaderVersionCombo.ItemsSource = null;
+            LblLoaderStatus.Text = "读取失败：" + ex.Message;
+        }
+    }
+
+    private async void OnInstallLoaderClick(object sender, RoutedEventArgs e)
+    {
+        if (LoaderCombo.SelectedIndex < 0 || TargetVersionCombo.SelectedItem is not string mc)
+        {
+            LblLoaderStatus.Text = "先选加载器和目标版本。";
+            return;
+        }
+        if (LoaderVersionCombo.SelectedItem is not LoaderVersion lv)
+        {
+            LblLoaderStatus.Text = "先选一个加载器版本。";
+            return;
+        }
+
+        var kind = Loaders.All[LoaderCombo.SelectedIndex];
+        if (Loaders.NeedsJava(kind))
+        {
+            if (string.IsNullOrEmpty(_javaExe)) await DetectJavaAsync();
+            if (string.IsNullOrEmpty(_javaExe))
+            {
+                LblLoaderStatus.Text = "这个加载器要用 Java 跑官方安装器，先装 Java 21（或在启动页指定 javaw.exe）。";
+                return;
+            }
+        }
+
+        BtnInstallLoader.IsEnabled = false;
+        LoaderBar.Visibility = Visibility.Visible;
+        LoaderBar.Value = 0;
+        _cts = new CancellationTokenSource();
+        var progress = new Progress<InstallProgress>(p =>
+        {
+            LblLoaderStatus.Text = p.Stage;
+            LoaderBar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
+        });
+
+        try
+        {
+            var id = await Loaders.InstallAsync(kind, mc, lv.Version, _cfg.GameDir, _javaExe, progress,
+                line => Dispatcher.BeginInvoke(() => AppendLog(line)), _cts.Token);
+
+            RefreshVersions();
+            if (!string.IsNullOrEmpty(id))
+            {
+                var found = _all.FirstOrDefault(v => v.Id == id);
+                if (found is not null)
+                {
+                    VersionList.SelectedItem = found;
+                    ShowVersion(found);
+                }
+            }
+            LblLoaderStatus.Text = string.IsNullOrEmpty(id)
+                ? "安装器已启动，按它窗口里的提示完成后点「刷新」。"
+                : "装好了：" + id + "。已打开 mods 文件夹。";
+            OpenModsFolder();
+        }
+        catch (OperationCanceledException)
+        {
+            LblLoaderStatus.Text = "已取消";
+        }
+        catch (Exception ex)
+        {
+            LblLoaderStatus.Text = "安装失败：" + ex.Message;
+            AppendLog("加载器安装失败：" + ex.Message);
+        }
+        finally
+        {
+            BtnInstallLoader.IsEnabled = true;
+            LoaderBar.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    // ---------------------------------------------------------------- mods 目录
+    private string ModsDir()
+    {
+        var dir = _cfg.Isolation && _current is not null
+            ? Path.Combine(_current.Dir, "mods")
+            : Path.Combine(_cfg.GameDir, "mods");
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    private void OpenModsFolder()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", '"' + ModsDir() + '"'));
+        }
+        catch (Exception ex)
+        {
+            SetStatus("打开 mods 目录失败：" + ex.Message, false);
+        }
+    }
+
+    private void OnOpenModsDirClick(object sender, RoutedEventArgs e) => OpenModsFolder();
+
+    // ---------------------------------------------------------------- 模组页
+    private string SelectedSortKey =>
+        ModSortCombo.SelectedIndex >= 0 ? Modrinth.Sorts[ModSortCombo.SelectedIndex].Key : "relevance";
+
+    private string SelectedModLoader =>
+        ModLoaderCombo.SelectedIndex >= 0 ? Modrinth.LoaderFilters[ModLoaderCombo.SelectedIndex].Key : "";
+
+    private void InitModTab()
+    {
+        if (ModSortCombo.ItemsSource is null)
+        {
+            ModSortCombo.ItemsSource = Modrinth.Sorts.Select(s => s.Label).ToList();
+            ModSortCombo.SelectedIndex = 0;
+            ModLoaderCombo.ItemsSource = Modrinth.LoaderFilters.Select(s => s.Label).ToList();
+            ModLoaderCombo.SelectedIndex = 0;
+        }
+        // 首次进入时用当前版本的 MC 版本和加载器预填筛选
+        if (string.IsNullOrWhiteSpace(ModMcBox.Text) && _current is not null)
+        {
+            ModMcBox.Text = _current.McVersion;
+            ModLoaderCombo.SelectedIndex = _current.Loader switch
+            {
+                "Fabric" => 1,
+                "Quilt" => 2,
+                "Forge" => 3,
+                "NeoForge" => 4,
+                _ => 0
+            };
+            _modInited = true;
+            _ = RunModSearchAsync(0);
+            return;
+        }
+        if (!_modInited)
+        {
+            _modInited = true;
+            _ = RunModSearchAsync(0);
+        }
+    }
+
+    private async Task RunModSearchAsync(int offset)
+    {
+        _modOffset = Math.Max(0, offset);
+        LblModStatus.Text = "检索中…";
+        try
+        {
+            var (hits, total) = await Modrinth.SearchAsync(ModSearchBox.Text.Trim(), ModMcBox.Text.Trim(),
+                SelectedModLoader, SelectedSortKey, _modOffset, 20, CancellationToken.None);
+            _modHits = hits;
+            _modTotal = total;
+            ModList.ItemsSource = null;
+            ModList.ItemsSource = _modHits;
+            LblModStatus.Text = $"共 {total} 个结果 · 第 {_modOffset / 20 + 1} / {Math.Max(1, (total + 19) / 20)} 页";
+            ModVersionList.ItemsSource = null;
+            _modFiles = new List<ModFile>();
+        }
+        catch (Exception ex)
+        {
+            LblModStatus.Text = "检索失败：" + ex.Message;
+        }
+    }
+
+    private void OnModSearchClick(object sender, RoutedEventArgs e) => _ = RunModSearchAsync(0);
+
+    private void OnModSearchKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter) _ = RunModSearchAsync(0);
+    }
+
+    private void OnModPrevClick(object sender, RoutedEventArgs e)
+    {
+        if (_modOffset > 0) _ = RunModSearchAsync(_modOffset - 20);
+    }
+
+    private void OnModNextClick(object sender, RoutedEventArgs e)
+    {
+        if (_modOffset + 20 < _modTotal) _ = RunModSearchAsync(_modOffset + 20);
+    }
+
+    private async void OnModSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (ModList.SelectedItem is not ModHit hit) return;
+        ModDetailTitle.Text = hit.Title;
+        ModDetailDesc.Text = hit.Description;
+        ModVersionList.ItemsSource = null;
+        _modFiles = new List<ModFile>();
+        LblModDownload.Text = "读取版本列表…";
+        try
+        {
+            _modFiles = await Modrinth.FilesAsync(hit.ProjectId, ModMcBox.Text.Trim(), SelectedModLoader,
+                CancellationToken.None);
+            ModVersionList.ItemsSource = _modFiles;
+            if (_modFiles.Count > 0) ModVersionList.SelectedIndex = 0;
+            LblModDownload.Text = _modFiles.Count == 0
+                ? "没有匹配当前版本/加载器的文件，换个筛选试试。"
+                : "共 " + _modFiles.Count + " 个可用文件";
+        }
+        catch (Exception ex)
+        {
+            LblModDownload.Text = "读取失败：" + ex.Message;
+        }
+    }
+
+    private async void OnModDownloadClick(object sender, RoutedEventArgs e)
+    {
+        var file = ModVersionList.SelectedItem as ModFile ?? _modFiles.FirstOrDefault();
+        if (file is null)
+        {
+            LblModDownload.Text = "先选一个文件。";
+            return;
+        }
+        var dir = ModsDir();
+        BtnModDownload.IsEnabled = false;
+        ModBar.Visibility = Visibility.Visible;
+        ModBar.Value = 0;
+        try
+        {
+            var progress = new Progress<(long done, long total)>(p =>
+            {
+                if (p.total > 0) ModBar.Value = p.done * 100.0 / p.total;
+                LblModDownload.Text = string.Format("{0} / {1} KB", p.done / 1024, p.total / 1024);
+            });
+            var ok = await Modrinth.DownloadAsync(file, dir, progress, CancellationToken.None);
+            LblModDownload.Text = ok ? "已下载到 " + dir : "下载失败（网络或文件已被作者删除）";
+            if (ok) SetStatus("已下载 " + file.Name, false);
+        }
+        catch (Exception ex)
+        {
+            LblModDownload.Text = "下载失败：" + ex.Message;
+        }
+        finally
+        {
+            BtnModDownload.IsEnabled = true;
+            ModBar.Visibility = Visibility.Collapsed;
+        }
+    }
+
     private async void OnTabChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!ReferenceEquals(e.OriginalSource, Tabs)) return;
         if (Tabs.SelectedIndex == 3 && _official.Count == 0)
             await LoadOfficialAsync();
+        if (Tabs.SelectedIndex == 4) InitModTab();
     }
 
     private async Task LoadOfficialAsync()

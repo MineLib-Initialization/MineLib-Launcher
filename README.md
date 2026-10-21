@@ -15,6 +15,8 @@
 | 启动 | 合并继承链 → 过滤 rules → 拼 classpath → 解压老版本 natives → 替换启动参数 → 起进程并实时收日志 |
 | 文件装配 | 缺客户端 jar / 依赖库 / 资源索引时，按 json 里的官方地址补齐 |
 | 安装版本 | 「下载」页列出官方清单，可安装任意正式版/快照（首次会下全部 libraries 与 assets） |
+| 安装加载器 | Fabric / Quilt / Forge / NeoForge / LiteLoader，装完自动打开 mods 文件夹 |
+| 模组下载 | 「模组」页直连 Modrinth 检索，按加载器/游戏版本筛选，下载直接落到 mods |
 | 登录 | 微软正版（设备码 OAuth）、外置登录（Yggdrasil + authlib-injector）、离线 |
 | 设置 | 游戏目录、Java 路径、内存上限、版本隔离、额外 JVM 参数、Azure client id |
 
@@ -97,3 +99,23 @@
 
 配色只有中性灰加一个钢蓝：`#F4F4F5` 底、白面板、`#DCDCE0` 1px 分隔、`#35618E` 强调。
 没有渐变、阴影堆叠、圆角胶囊和图标字体——所有控件都是 WPF 原生渲染，样式集中在 `Themes/Styles.xaml`。
+## 加载器安装
+
+| 加载器 | 做法 | 备注 |
+|---|---|---|
+| Fabric | 取官方 meta 的 profile/json 写进 versions/fabric-loader-<loader>-<mc>/ | 纯文本，秒装，不需要 Java |
+| Quilt | 同上，数据来自 meta.quiltmc.org | 同上 |
+| Forge | 下载 forge-<mc>-<ver>-installer.jar，跑 java -jar ... --installClient <gameDir> | 需要 Java，会顺带准备 launcher_profiles.json |
+| NeoForge | 下载 neoforge-<ver>-installer.jar，同样走 --installClient | 版本号按 MC 映射（1.21.1 → 21.1.x） |
+| LiteLoader | 只有图形界面安装器，下载后交给它自己跑 | 仅支持到 1.12.2 这类老版本 |
+
+装完会选中新版本并打开 mods 目录（开了版本隔离就是版本目录里的 mods）。
+
+## 模组页
+
+左侧检索走 Modrinth 官方 API，用 project_type:mod + 加载器 + 游戏版本三个 facet 过滤，
+列表显示图标、简介、许可证和下载量；右侧显示选中项目的可用版本文件，点「下载并放到 mods」写进 mods 目录。
+不镜像、不改文件，拿的就是作者的 CDN 链接。
+
+自检：MineLibLauncher.exe --selftest 会把加载器版本列表、Modrinth 检索、一次 Fabric 安装的结果
+写到 %TEMP%\minelib-selftest.txt，不开界面。

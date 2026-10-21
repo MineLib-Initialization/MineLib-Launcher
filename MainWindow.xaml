@@ -327,34 +327,208 @@
           <!-- 下载 -->
           <TabItem Header="下载">
             <Grid Margin="8,10,4,8">
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="Auto" />
-              </Grid.RowDefinitions>
-              <TextBlock Grid.Row="0" x:Name="LblInstallHint"
-                         Text="从 Mojang 官方清单安装游戏版本。首次安装会下载依赖库与资源文件。"
-                         Style="{StaticResource Dim}" Margin="0,0,0,8" TextWrapping="Wrap" />
-              <ListBox Grid.Row="1" x:Name="OfficialList" BorderBrush="{StaticResource Border}">
-                <ListBox.ItemTemplate>
-                  <DataTemplate>
-                    <StackPanel Orientation="Horizontal">
-                      <TextBlock Text="{Binding Id}" Width="170" FontWeight="SemiBold" />
-                      <TextBlock Text="{Binding Type}" Width="90" Style="{StaticResource Dim}"
-                                 VerticalAlignment="Center" />
-                      <TextBlock Text="{Binding ReleaseTime}" Style="{StaticResource Dim}"
-                                 VerticalAlignment="Center" />
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="304" />
+              </Grid.ColumnDefinitions>
+
+              <Grid Grid.Column="0" Margin="0,0,12,0">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="*" />
+                  <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" x:Name="LblInstallHint"
+                           Text="从 Mojang 官方清单安装游戏版本。首次安装会下载依赖库与资源文件。"
+                           Style="{StaticResource Dim}" Margin="0,0,0,8" TextWrapping="Wrap" />
+                <ListBox Grid.Row="1" x:Name="OfficialList" BorderBrush="{StaticResource Border}">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate>
+                      <StackPanel Orientation="Horizontal" Margin="4,3">
+                        <TextBlock Text="{Binding Id}" Width="170" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding Type}" Width="90" Style="{StaticResource Dim}"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ReleaseTime}" Style="{StaticResource Dim}"
+                                   VerticalAlignment="Center" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                  <Button x:Name="BtnDoInstall" Content="安装选中版本" Click="OnDoInstallClick"
+                          Style="{StaticResource Primary}" Padding="14,5" />
+                  <Button Content="取消" Click="OnCancelClick" Padding="12,5" Margin="8,0,0,0" />
+                  <TextBlock x:Name="LblInstallStatus" Text="" Style="{StaticResource Dim}"
+                             VerticalAlignment="Center" Margin="12,0,0,0" />
+                </StackPanel>
+              </Grid>
+
+              <!-- 加载器 -->
+              <Border Grid.Column="1" Style="{StaticResource Card}" VerticalAlignment="Top">
+                <StackPanel>
+                  <TextBlock Text="安装模组加载器" Style="{StaticResource CardTitle}" />
+                  <TextBlock Text="装到当前游戏目录的 versions 里，装完自动打开 mods 文件夹。"
+                             Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,0,0,10" />
+
+                  <TextBlock Text="加载器" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                  <ComboBox x:Name="LoaderCombo" Margin="0,0,0,8"
+                            SelectionChanged="OnLoaderKindChanged" />
+
+                  <TextBlock Text="目标 Minecraft 版本" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                  <ComboBox x:Name="TargetVersionCombo" Margin="0,0,0,8"
+                            SelectionChanged="OnLoaderTargetChanged" />
+
+                  <TextBlock Text="加载器版本" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                  <ComboBox x:Name="LoaderVersionCombo" Margin="0,0,0,10" DisplayMemberPath="Display" />
+
+                  <Button x:Name="BtnInstallLoader" Content="安装加载器" Click="OnInstallLoaderClick"
+                          Style="{StaticResource Primary}" HorizontalAlignment="Stretch" Padding="12,6" />
+                  <ProgressBar x:Name="LoaderBar" Margin="0,10,0,0" Visibility="Collapsed" />
+                  <TextBlock x:Name="LblLoaderStatus" Text="" Style="{StaticResource Dim}" TextWrapping="Wrap"
+                             Margin="0,8,0,0" />
+                </StackPanel>
+              </Border>
+            </Grid>
+          </TabItem>
+
+          <!-- 模组 -->
+          <TabItem Header="模组">
+            <Grid Margin="8,10,4,8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="332" />
+              </Grid.ColumnDefinitions>
+
+              <Grid Grid.Column="0" Margin="0,0,12,0">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="*" />
+                  <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Margin="0,0,0,8">
+                  <DockPanel Margin="0,0,0,6" LastChildFill="True">
+                    <Button DockPanel.Dock="Right" x:Name="BtnModSearch" Content="搜索" Click="OnModSearchClick"
+                            Padding="16,4" Margin="6,0,0,0" />
+                    <TextBox x:Name="ModSearchBox" Height="26" KeyDown="OnModSearchKeyDown" />
+                  </DockPanel>
+                  <DockPanel LastChildFill="False">
+                    <TextBlock Text="排序" Style="{StaticResource Dim}" VerticalAlignment="Center"
+                               Margin="0,0,6,0" />
+                    <ComboBox x:Name="ModSortCombo" Width="104" Margin="0,0,10,0" />
+                    <TextBlock Text="MC 版本" Style="{StaticResource Dim}" VerticalAlignment="Center"
+                               Margin="0,0,6,0" />
+                    <TextBox x:Name="ModMcBox" Width="84" Margin="0,0,10,0" Height="26" />
+                    <ComboBox x:Name="ModLoaderCombo" Width="118" />
+                  </DockPanel>
+                </StackPanel>
+
+                <ListBox Grid.Row="1" x:Name="ModList" BorderBrush="{StaticResource Border}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         SelectionChanged="OnModSelected">
+                  <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                      <Setter Property="Padding" Value="0" />
+                      <Setter Property="Template">
+                        <Setter.Value>
+                          <ControlTemplate TargetType="ListBoxItem">
+                            <Border x:Name="bd" Background="Transparent" BorderThickness="2,0,0,0"
+                                    BorderBrush="Transparent" Padding="0">
+                              <ContentPresenter />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                              <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource Hover}" />
+                              </Trigger>
+                              <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource Selected}" />
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource Accent}" />
+                              </Trigger>
+                            </ControlTemplate.Triggers>
+                          </ControlTemplate>
+                        </Setter.Value>
+                      </Setter>
+                    </Style>
+                  </ListBox.ItemContainerStyle>
+                  <ListBox.ItemTemplate>
+                    <DataTemplate>
+                      <Grid Margin="10,8">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto" />
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Border Width="40" Height="40" CornerRadius="3" Background="{StaticResource Hover}"
+                                ClipToBounds="True" Margin="0,0,11,0" VerticalAlignment="Top">
+                          <Image Source="{Binding IconUrl}" Stretch="UniformToFill" />
+                        </Border>
+                        <StackPanel Grid.Column="1">
+                          <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding Description}" Style="{StaticResource Dim}"
+                                     TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
+                          <TextBlock Text="{Binding Meta}" Style="{StaticResource Dim}" FontSize="11"
+                                     Foreground="{StaticResource TextFaint}" Margin="0,3,0,0"
+                                     TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="2" Text="{Binding DownloadsText}" Style="{StaticResource Mono}"
+                                   Foreground="{StaticResource TextDim}" VerticalAlignment="Center"
+                                   Margin="10,0,0,0" />
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+
+                <DockPanel Grid.Row="2" Margin="0,8,0,0">
+                  <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Content="上一页" Click="OnModPrevClick" Padding="10,4" />
+                    <Button Content="下一页" Click="OnModNextClick" Padding="10,4" Margin="6,0,0,0" />
+                  </StackPanel>
+                  <TextBlock x:Name="LblModStatus" Text="" Style="{StaticResource Dim}"
+                             VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </DockPanel>
+              </Grid>
+
+              <Border Grid.Column="1" Style="{StaticResource Card}" VerticalAlignment="Stretch">
+                <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                  </Grid.RowDefinitions>
+
+                  <TextBlock Grid.Row="0" x:Name="ModDetailTitle" Text="选一个模组" FontSize="16"
+                             FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Grid.Row="1" x:Name="ModDetailDesc" Text="左侧搜索后点一行，这里显示可用版本。"
+                             Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,6,0,10"
+                             MaxHeight="96" />
+
+                  <StackPanel Grid.Row="2">
+                    <TextBlock Text="可用版本" Style="{StaticResource Dim}" Margin="0,0,0,4" />
+                    <ListBox x:Name="ModVersionList" Height="188" BorderBrush="{StaticResource Border}">
+                      <ListBox.ItemTemplate>
+                        <DataTemplate>
+                          <TextBlock Text="{Binding Display}" Style="{StaticResource Mono}" Margin="4,3" />
+                        </DataTemplate>
+                      </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock Text="下载目录随「版本隔离」决定：开了就进版本目录的 mods，否则进游戏目录的 mods。"
+                               Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                  </StackPanel>
+
+                  <StackPanel Grid.Row="3" Margin="0,10,0,0">
+                    <Button x:Name="BtnModDownload" Content="下载并放到 mods" Click="OnModDownloadClick"
+                            Style="{StaticResource Primary}" HorizontalAlignment="Stretch" Padding="12,6" />
+                    <ProgressBar x:Name="ModBar" Margin="0,8,0,0" Visibility="Collapsed" />
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                      <Button Content="打开 mods 目录" Click="OnOpenModsDirClick" Padding="10,4" />
+                      <TextBlock x:Name="LblModDownload" Text="" Style="{StaticResource Dim}"
+                                 VerticalAlignment="Center" Margin="10,0,0,0" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
-                  </DataTemplate>
-                </ListBox.ItemTemplate>
-              </ListBox>
-              <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
-                <Button x:Name="BtnDoInstall" Content="安装选中版本" Click="OnDoInstallClick"
-                        Style="{StaticResource Primary}" Padding="14,5" />
-                <Button Content="取消" Click="OnCancelClick" Padding="12,5" Margin="8,0,0,0" />
-                <TextBlock x:Name="LblInstallStatus" Text="" Style="{StaticResource Dim}"
-                           VerticalAlignment="Center" Margin="12,0,0,0" />
-              </StackPanel>
+                  </StackPanel>
+                </Grid>
+              </Border>
             </Grid>
           </TabItem>
         </TabControl>

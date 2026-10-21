@@ -31,6 +31,13 @@ public static class Http
         return JsonNode.Parse(text) ?? throw new InvalidDataException("空 JSON: " + url);
     }
 
+    public static async Task<string> GetStringAsync(string url, CancellationToken ct = default)
+    {
+        using var resp = await Client.GetAsync(url, ct).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+    }
+
     public static async Task<JsonNode> PostJsonAsync(string url, JsonObject body,
         string? bearer = null, CancellationToken ct = default)
     {
