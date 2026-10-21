@@ -841,13 +841,16 @@ public partial class MainWindow : Window
                         v["id"]?.ToString() ?? "",
                         v["type"]?.ToString() ?? "",
                         when));
-                    if (list.Count >= 80) break;
                 }
             }
             _official = list;
-            OfficialList.ItemsSource = _official;
-            OfficialList.SelectedIndex = 0;
-            LblCreateStatus.Text = "列出最近 " + _official.Count + " 个版本";
+            if (VerTypeCombo.ItemsSource is null)
+            {
+                VerTypeCombo.ItemsSource = new[] { "正式版", "快照", "全部" };
+                VerTypeCombo.SelectedIndex = 0;
+            }
+            ApplyOfficialFilter();
+            LblCreateStatus.Text = "官方清单共 " + _official.Count + " 个版本（含快照）";
         }
         catch (Exception ex)
         {
@@ -922,6 +925,26 @@ public partial class MainWindow : Window
             BtnCreateCancel.Visibility = Visibility.Collapsed;
             CreateBar.Visibility = Visibility.Collapsed;
         }
+    }
+
+    private void OnVersionFilterChanged(object? sender, EventArgs e) => ApplyOfficialFilter();
+
+    private void ApplyOfficialFilter()
+    {
+        var type = (VerTypeCombo.SelectedItem as string) ?? "正式版";
+        var q = (VerSearchBox?.Text ?? "").Trim();
+        var view = _official.Where(v =>
+        {
+            if (type == "正式版" && v.Type != "release") return false;
+            if (type == "快照" && v.Type == "release") return false;
+            if (q.Length > 0 && v.Id.IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0) return false;
+            return true;
+        }).ToList();
+
+        OfficialList.ItemsSource = null;
+        OfficialList.ItemsSource = view;
+        if (view.Count > 0) OfficialList.SelectedIndex = 0;
+        LblVerCount.Text = "共 " + view.Count + " 个";
     }
 
     private void OnInstallClick(object sender, RoutedEventArgs e) => Tabs.SelectedIndex = 3;
