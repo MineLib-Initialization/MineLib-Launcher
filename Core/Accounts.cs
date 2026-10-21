@@ -156,6 +156,21 @@ public static class MicrosoftAuth
         throw new AuthException("登录超时，请重试。");
     }
 
+    private static AuthException Explain(HttpRequestException ex, string step)
+    {
+        var text = ex.Message;
+        if (step == "mc" && text.Contains("403"))
+            return new AuthException(
+                "Xbox 拒绝了 Minecraft 登录（403）。常见原因是这个微软账号还没有 Xbox 档案：" +
+                "先用同一账号打开 xbox.com 登录一次、建好档案并接受条款；另外也需要拥有 Minecraft Java 版。");
+        if (step == "mc" && text.Contains("401"))
+            return new AuthException("Minecraft 登录被拒绝（401），这个微软账号可能没有 Minecraft Java 版。");
+        if (step == "xsts")
+            return new AuthException("Xbox 安全令牌获取失败：" + text +
+                                     "。儿童账号需要家长在 microsoft.com/family 里同意。");
+        return new AuthException(text);
+    }
+
     public static async Task<Account> ExchangeAsync(string msaToken, string clientId, CancellationToken ct = default)
     {
         var xbl = (JsonObject)await Http.PostJsonAsync(XblUrl, new JsonObject
@@ -171,16 +186,24 @@ public static class MicrosoftAuth
         }, null, ct).ConfigureAwait(false);
 
         var xblToken = xbl["Token"]?.ToString() ?? throw new AuthException("Xbox Live 认证失败");
-        var xsts = (JsonObject)await Http.PostJsonAsync(XstsUrl, new JsonObject
+        JsonObject xsts;
+        try
         {
-            ["Properties"] = new JsonObject
+            xsts = (JsonObject)await Http.PostJsonAsync(XstsUrl, new JsonObject
             {
-                ["SandboxId"] = "RETAIL",
-                ["UserTokens"] = new JsonArray { xblToken }
-            },
-            ["RelyingParty"] = "rp://api.minecraftservices.com/",
-            ["TokenType"] = "JWT"
-        }, null, ct).ConfigureAwait(false);
+                ["Properties"] = new JsonObject
+                {
+                    ["SandboxId"] = "RETAIL",
+                    ["UserTokens"] = new JsonArray { xblToken }
+                },
+                ["RelyingParty"] = "rp://api.minecraftservices.com/",
+                ["TokenType"] = "JWT"
+            }, null, ct).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw Explain(ex, "xsts");
+        }
 
         var xui = xsts["DisplayClaims"]?["xui"]?[0]
                   ?? throw new AuthException("XSTS 未返回用户信息");
@@ -188,10 +211,18 @@ public static class MicrosoftAuth
         var xid = xui["xid"]?.ToString() ?? "";
         var xstsToken = xsts["Token"]?.ToString() ?? "";
 
-        var login = (JsonObject)await Http.PostJsonAsync(McLoginUrl, new JsonObject
+        JsonObject login;
+        try
         {
-            ["identityToken"] = $"XBL3.0 x={uhs};{xstsToken}"
-        }, null, ct).ConfigureAwait(false);
+            login = (JsonObject)await Http.PostJsonAsync(McLoginUrl, new JsonObject
+            {
+                ["identityToken"] = $"XBL3.0 x={uhs};{xstsToken}"
+            }, null, ct).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw Explain(ex, "mc");
+        }
 
         var token = login["access_token"]?.ToString() ?? throw new AuthException("Minecraft 认证失败");
         var profile = await GetProfileAsync(token, ct).ConfigureAwait(false);
