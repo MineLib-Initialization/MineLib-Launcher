@@ -45,12 +45,14 @@
           </Grid.RowDefinitions>
           <StackPanel Grid.Row="0" Margin="12,10,12,8">
             <TextBlock Text="客户端" Style="{StaticResource CardTitle}" Margin="0,0,0,6" />
-            <DockPanel LastChildFill="True">
-              <Button DockPanel.Dock="Right" Content="新建" Click="OnNewInstanceClick" Padding="9,2"
-                      Margin="6,0,0,0" />
-              <ComboBox x:Name="InstanceCombo" DisplayMemberPath="Display"
-                        SelectionChanged="OnInstanceChanged" />
-            </DockPanel>
+            <ComboBox x:Name="InstanceCombo" DisplayMemberPath="Display"
+                      SelectionChanged="OnInstanceChanged" />
+            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+              <Button Content="新建" Click="OnNewInstanceClick" Padding="10,2" />
+              <Button Content="打开目录" Click="OnOpenInstanceDirClick" Padding="10,2" Margin="6,0,0,0" />
+              <Button Content="删除" Click="OnDeleteInstanceClick" Padding="10,2" Margin="6,0,0,0"
+                      Style="{StaticResource Danger}" />
+            </StackPanel>
           </StackPanel>
           <TextBlock Grid.Row="1" x:Name="LblVersionCount" Text="版本" Style="{StaticResource SectionTitle}"
                      Margin="12,4,12,4" />

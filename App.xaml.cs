@@ -10,12 +10,69 @@ public partial class App : Application
     /// <summary>--selftest：不开界面，跑一遍加载器与模组接口，结果写到临时文件（便于离线核对）。</summary>
     protected override async void OnStartup(StartupEventArgs e)
     {
+        if (e.Args.Contains("--selftest-create"))
+        {
+            var sb = new StringBuilder();
+            var cfg = AppConfig.Load();
+            var parent = Environment.GetEnvironmentVariable("MINELIB_NEW_DIR")
+                         ?? Path.Combine(Path.GetTempPath(), "minelib-clients");
+            var name = Environment.GetEnvironmentVariable("MINELIB_NEW_NAME") ?? "测试新客户端";
+            var mc = Environment.GetEnvironmentVariable("MINELIB_NEW_MC") ?? "1.7.10";
+            var loader = Environment.GetEnvironmentVariable("MINELIB_NEW_LOADER") ?? "不装（纯原版）";
+            try
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var progress = new Progress<InstallProgress>(p => { if (p.Fraction is > 0 and < 1) sb.AppendLine("  " + p.Stage); });
+                var result = await ClientCreator.CreateAsync(cfg, parent, name, mc, loader, 16, "", progress,
+                    line => sb.AppendLine("  log: " + line), CancellationToken.None);
+                sw.Stop();
+                sb.AppendLine($"创建成功 dir={result.Dir} version={result.VersionId} note={result.Note} 用时={sw.Elapsed.TotalSeconds:0}s");
+                sb.AppendLine("磁盘占用 = " + Math.Round(new DirectoryInfo(result.Dir)
+                    .EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length) / 1048576.0, 1) + " MB");
+
+                var scanned = Versions.Scan(result.Dir);
+                sb.AppendLine("版本扫描 = " + string.Join(" | ", scanned.Select(v => v.Id + "(" + v.Subtitle + ")")));
+
+                var merged = Versions.Resolve(result.Dir, result.VersionId);
+                var javaInfo = JavaFinder.Find("", result.Dir, merged["javaVersion"]?["majorVersion"]?.GetValue<int>() ?? 21);
+                sb.AppendLine("java = " + javaInfo.exe + "  " + javaInfo.note);
+                var acct = OfflineAuth.Create("Tester");
+                await GameLauncher.PrepareAsync(result.Dir, result.VersionId, merged, 16, null, CancellationToken.None);
+                var (args, _) = GameLauncher.BuildCommand(result.Dir, result.VersionId, merged, acct,
+                    javaInfo.exe, 2048, "", result.Dir);
+
+                var proc = new GameProcess();
+                var lines = new List<string>();
+                var exited = new TaskCompletionSource<int>();
+                proc.LineReceived += line => { lock (lines) { if (lines.Count < 200) lines.Add(line); } };
+                proc.Exited += code => exited.TrySetResult(code);
+                proc.Start(javaInfo.exe, args, result.Dir, Path.Combine(result.Dir, "logs", "create-test.log"));
+                var done = await Task.WhenAny(exited.Task, Task.Delay(35000));
+                var early = done == exited.Task;
+                if (!early) proc.Stop();
+                await Task.Delay(1500);
+                lock (lines)
+                {
+                    sb.AppendLine("提前退出=" + early);
+                    sb.AppendLine("主类错误=" + lines.Any(l => l.Contains("Could not find") || l.Contains("ClassNotFoundException") || l.Contains("NoClassDefFound")));
+                    sb.AppendLine("---- 输出 ----");
+                    foreach (var line in lines.Take(25)) sb.AppendLine(line);
+                }
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("CREATE FAIL " + ex.Message);
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-create.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         if (e.Args.Contains("--selftest-launch"))
         {
             var sb = new StringBuilder();
             var gameDir = Environment.GetEnvironmentVariable("MINELIB_E2E_DIR")
                           ?? Path.Combine(Path.GetTempPath(), "minelib-e2e");
-            var vid = "fabric-loader-0.19.5-1.21.1";
+            var vid = Environment.GetEnvironmentVariable("MINELIB_E2E_VER") ?? "fabric-loader-0.19.5-1.21.1";
             try
             {
                 var merged = Versions.Resolve(gameDir, vid);

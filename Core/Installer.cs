@@ -81,6 +81,41 @@ public static class Installer
         return baseUrl.TrimEnd('/') + "/" + path.Replace('\\', '/');
     }
 
+    /// <summary>natives 的 classifier 键（natives-windows-${arch} 这类占位符要替换）。</summary>
+    public static string? NativeKey(JsonObject lib)
+    {
+        if (lib["natives"] is not JsonObject natives) return null;
+        var key = natives[CurrentOs]?.ToString();
+        if (string.IsNullOrEmpty(key)) return null;
+        return key.Replace("$" + "{arch}", Environment.Is64BitOperatingSystem ? "64" : "32");
+    }
+
+    /// <summary>一个库需要下载的全部文件：主 jar + 当前系统的 natives jar。</summary>
+    public static List<Http.DownloadTask> LibArtifacts(JsonObject lib, string gameDir)
+    {
+        var list = new List<Http.DownloadTask>();
+
+        var url = LibUrl(lib);
+        var path = LibPath(lib);
+        if (url is not null && path.Length > 0)
+        {
+            var art = lib["downloads"]?["artifact"];
+            list.Add(new Http.DownloadTask(url, Path.Combine(gameDir, "libraries", path),
+                art?["sha1"]?.ToString(), art?["size"]?.GetValue<long>() ?? 0));
+        }
+
+        var key = NativeKey(lib);
+        if (key is not null && lib["downloads"]?["classifiers"]?[key] is JsonObject cls)
+        {
+            var clsPath = cls["path"]?.ToString();
+            var clsUrl = cls["url"]?.ToString();
+            if (!string.IsNullOrEmpty(clsPath) && !string.IsNullOrEmpty(clsUrl))
+                list.Add(new Http.DownloadTask(clsUrl, Path.Combine(gameDir, "libraries", clsPath),
+                    cls["sha1"]?.ToString(), cls["size"]?.GetValue<long>() ?? 0));
+        }
+        return list;
+    }
+
     /// <summary>沿继承链找客户端 jar：继承版本的 jar 在父版本目录里。</summary>
     public static string? FindClientJar(string gameDir, string vid)
     {
@@ -140,10 +175,9 @@ public static class Installer
             foreach (var node in libs)
             {
                 if (node is not JsonObject lib || !RuleAllows(lib)) continue;
-                if (LibUrl(lib) is null) continue;
-                var path = LibPath(lib);
-                if (path.Length == 0) continue;
-                if (!File.Exists(Path.Combine(gameDir, "libraries", path))) miss.Libraries.Add(lib);
+                var artifacts = LibArtifacts(lib, gameDir);
+                if (artifacts.Count == 0) continue;
+                if (!artifacts.All(a => File.Exists(a.Dest))) miss.Libraries.Add(lib);
             }
         }
 
@@ -175,13 +209,7 @@ public static class Installer
             foreach (var node in libs)
             {
                 if (node is not JsonObject lib || !RuleAllows(lib)) continue;
-                var url = LibUrl(lib);
-                if (url is null) continue;
-                var path = LibPath(lib);
-                if (path.Length == 0) continue;
-                var art = lib["downloads"]?["artifact"];
-                tasks.Add(new Http.DownloadTask(url, Path.Combine(gameDir, "libraries", path),
-                    art?["sha1"]?.ToString(), art?["size"]?.GetValue<long>() ?? 0));
+                tasks.AddRange(LibArtifacts(lib, gameDir));
             }
         }
         await Http.DownloadManyAsync(tasks, threads, Wrap(onProgress), ct).ConfigureAwait(false);
@@ -226,7 +254,7 @@ public static class Installer
         foreach (var node in libs)
         {
             if (node is not JsonObject lib || !RuleAllows(lib)) continue;
-            var key = lib["natives"]?[os]?.ToString();
+            var key = NativeKey(lib);
             if (string.IsNullOrEmpty(key)) continue;
             var rel = lib["downloads"]?["classifiers"]?[key]?["path"]?.ToString();
             if (string.IsNullOrEmpty(rel)) continue;

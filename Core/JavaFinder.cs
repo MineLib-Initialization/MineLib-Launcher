@@ -32,7 +32,10 @@ public static class JavaFinder
             return (closest.Exe, closest.Major, $"Java {closest.Major}（建议 {needMajor}）");
 
         var first = scanned[0];
-        return (first.Exe, first.Major, $"Java {first.Major}（建议 {needMajor}）");
+        var hint = needMajor is > 0 and <= 8 && first.Major > 8
+            ? $"这个版本需要 Java {needMajor}，当前只有 Java {first.Major}（老版本在 Java 21 上会崩）"
+            : $"Java {first.Major}（建议 {needMajor}）";
+        return (first.Exe, first.Major, hint);
     }
 
     private static List<string> Candidates(string configPath, string gameDir)
