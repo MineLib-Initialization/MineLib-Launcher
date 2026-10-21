@@ -79,6 +79,7 @@ public sealed class AppConfig
         }
     }
 
+    [System.Text.Json.Serialization.JsonIgnore]
     public InstanceRef? CurrentInstanceRef =>
         Instances.FirstOrDefault(i => i.Dir == GameDir) ?? Instances.FirstOrDefault();
 
@@ -102,6 +103,7 @@ public sealed class AppConfig
         return found;
     }
 
+    [System.Text.Json.Serialization.JsonIgnore]
     public Account? CurrentAccount =>
         Accounts.FirstOrDefault(a => a.Key == LastAccountKey) ?? Accounts.FirstOrDefault();
 

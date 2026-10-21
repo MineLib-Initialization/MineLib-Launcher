@@ -22,8 +22,10 @@ public sealed class Account
     public string ClientToken { get; set; } = "";
     public double ExpiresAt { get; set; }
 
+    [System.Text.Json.Serialization.JsonIgnore]
     public string Key => Type + ":" + (string.IsNullOrEmpty(Uuid) ? Name : Uuid);
 
+    [System.Text.Json.Serialization.JsonIgnore]
     public string TypeLabel => Type switch
     {
         "microsoft" => "微软正版",
@@ -31,6 +33,7 @@ public sealed class Account
         _ => "离线"
     };
 
+    [System.Text.Json.Serialization.JsonIgnore]
     public string Summary => string.IsNullOrEmpty(Name) ? "未登录" : Name + "（" + TypeLabel + "）";
 }
 
