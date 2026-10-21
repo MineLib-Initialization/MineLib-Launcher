@@ -78,7 +78,7 @@ public static class MicrosoftAuth
     /// 把它填在这里重新发布即可，所有用户点一下「用 Microsoft 账号登录」就完事。
     /// 优先级：config.json 的 AzureClientId → 环境变量 MINELIB_CLIENT_ID → exe 同目录 clientid.txt → 这里的常量。
     /// </summary>
-    public const string DefaultClientId = "";
+    public const string DefaultClientId = "4332323f-3c36-4dac-9d45-03e46139e4fa";
 
     public static string ResolveClientId(AppConfig cfg)
     {
