@@ -44,6 +44,10 @@ public partial class MainWindow : Window
         ValGameDir.Text = _cfg.GameDir;
         LoaderCombo.ItemsSource = Loaders.All.Select(Loaders.Label).ToList();
         LoaderCombo.SelectedIndex = 0;
+        ThreadsCombo.ItemsSource = new[] { 4, 8, 16, 32 };
+        var savedThreads = Math.Clamp(_cfg.DownloadThreads, 4, 32);
+        ThreadsCombo.SelectedItem = new[] { 4, 8, 16, 32 }.FirstOrDefault(t => t >= savedThreads);
+        if (ThreadsCombo.SelectedItem is null) ThreadsCombo.SelectedIndex = 1;
         LblStatusRight.Text = "MineLib 0.1";
         Bar.Visibility = Visibility.Collapsed;
         // 调试：MINELIB_TAB=1/2/3 直接打开账号/日志/下载页，便于离屏核对
@@ -225,6 +229,15 @@ public partial class MainWindow : Window
     }
 
     // ---------------------------------------------------------------- 设置项
+    private void OnThreadsChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ThreadsCombo.SelectedItem is int n)
+        {
+            _cfg.DownloadThreads = n;
+            _cfg.Save();
+        }
+    }
+
     private void OnIsolationChanged(object sender, RoutedEventArgs e)
     {
         _cfg.Isolation = ChkIsolation.IsChecked == true;
@@ -287,7 +300,8 @@ public partial class MainWindow : Window
                 LblStatus.Text = p.Stage;
                 Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
             });
-            await GameLauncher.PrepareAsync(_cfg.GameDir, _current.Id, _merged, progress, _cts.Token);
+            await GameLauncher.PrepareAsync(_cfg.GameDir, _current.Id, _merged, _cfg.DownloadThreads,
+                progress, _cts.Token);
             Bar.Value = 0;
 
             var runDir = _cfg.Isolation ? _current.Dir : _cfg.GameDir;
@@ -890,7 +904,7 @@ public partial class MainWindow : Window
                 LblInstallStatus.Text = p.Stage;
                 Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
             });
-            await Installer.InstallVersionAsync(_cfg.GameDir, v.Id, progress, _cts.Token);
+            await Installer.InstallVersionAsync(_cfg.GameDir, v.Id, _cfg.DownloadThreads, progress, _cts.Token);
             LblInstallStatus.Text = "已安装 " + v.Id;
             RefreshVersions();
         }

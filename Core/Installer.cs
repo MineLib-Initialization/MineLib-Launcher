@@ -122,29 +122,29 @@ public static class Installer
         await Http.DownloadAsync(url, dest, sha1, progress, ct).ConfigureAwait(false);
     }
 
-    public static async Task EnsureLibrariesAsync(string gameDir, JsonObject merged,
-        IProgress<(long, long)>? progress = null, Action<int, int, string>? onFile = null,
-        CancellationToken ct = default)
+    public static async Task EnsureLibrariesAsync(string gameDir, JsonObject merged, int threads,
+        Action<Http.BulkProgress>? onProgress, CancellationToken ct)
     {
-        if (merged["libraries"] is not JsonArray libs) return;
-        var pick = libs.OfType<JsonObject>().Where(RuleAllows).ToList();
-        for (var i = 0; i < pick.Count; i++)
+        var tasks = new List<Http.DownloadTask>();
+        if (merged["libraries"] is JsonArray libs)
         {
-            ct.ThrowIfCancellationRequested();
-            var lib = pick[i];
-            var art = lib["downloads"]?["artifact"];
-            var url = art?["url"]?.ToString();
-            if (string.IsNullOrEmpty(url)) continue;
-            var path = art!["path"]?.ToString() ?? MavenPath(lib["name"]?.ToString() ?? "");
-            var dest = Path.Combine(gameDir, "libraries", path);
-            onFile?.Invoke(i + 1, pick.Count, Path.GetFileName(dest));
-            await Http.DownloadAsync(url, dest, art["sha1"]?.ToString(), progress, ct).ConfigureAwait(false);
+            foreach (var node in libs)
+            {
+                if (node is not JsonObject lib || !RuleAllows(lib)) continue;
+                var art = lib["downloads"]?["artifact"];
+                var url = art?["url"]?.ToString();
+                if (string.IsNullOrEmpty(url)) continue;
+                var path = art!["path"]?.ToString() ?? MavenPath(lib["name"]?.ToString() ?? "");
+                if (path.Length == 0) continue;
+                tasks.Add(new Http.DownloadTask(url, Path.Combine(gameDir, "libraries", path),
+                    art["sha1"]?.ToString(), art["size"]?.GetValue<long>() ?? 0));
+            }
         }
+        await Http.DownloadManyAsync(tasks, threads, Wrap(onProgress), ct).ConfigureAwait(false);
     }
 
-    public static async Task EnsureAssetsAsync(string gameDir, JsonObject merged,
-        IProgress<(long, long)>? progress = null, Action<int, int>? onFile = null,
-        CancellationToken ct = default)
+    public static async Task EnsureAssetsAsync(string gameDir, JsonObject merged, int threads,
+        Action<Http.BulkProgress>? onProgress, CancellationToken ct)
     {
         var indexId = merged["assetIndex"]?["id"]?.ToString();
         var indexUrl = merged["assetIndex"]?["url"]?.ToString();
@@ -158,25 +158,20 @@ public static class Installer
         var index = JsonNode.Parse(await File.ReadAllTextAsync(idxPath, ct).ConfigureAwait(false));
         if (index?["objects"] is not JsonObject objects) return;
 
-        var entries = objects.ToList();
-        var done = 0;
-        foreach (var kv in entries)
+        var tasks = new List<Http.DownloadTask>(objects.Count);
+        foreach (var kv in objects)
         {
-            ct.ThrowIfCancellationRequested();
             var hash = kv.Value?["hash"]?.ToString();
             if (string.IsNullOrEmpty(hash) || hash.Length < 2) continue;
-            if (done % 40 == 0) onFile?.Invoke(done, entries.Count);
-            var dest = Path.Combine(gameDir, "assets", "objects", hash[..2], hash);
-            if (File.Exists(dest))
-            {
-                done++;
-                continue;
-            }
-            var ok = await Http.DownloadAsync($"{ResourceBase}/{hash[..2]}/{hash}", dest, hash, progress, ct)
-                .ConfigureAwait(false);
-            if (ok) done++;
+            tasks.Add(new Http.DownloadTask($"{ResourceBase}/{hash[..2]}/{hash}",
+                Path.Combine(gameDir, "assets", "objects", hash[..2], hash), hash,
+                kv.Value?["size"]?.GetValue<long>() ?? 0));
         }
+        await Http.DownloadManyAsync(tasks, threads, Wrap(onProgress), ct).ConfigureAwait(false);
     }
+
+    private static IProgress<Http.BulkProgress>? Wrap(Action<Http.BulkProgress>? onProgress) =>
+        onProgress is null ? null : new Progress<Http.BulkProgress>(onProgress);
 
     /// <summary>老版本（1.19 之前）的 natives 需要解压到独立目录。</summary>
     public static void ExtractNatives(string gameDir, JsonObject merged, string nativesDir)
@@ -213,7 +208,7 @@ public static class Installer
     }
 
     /// <summary>从头安装一个官方版本到 versions/ 下。</summary>
-    public static async Task<string> InstallVersionAsync(string gameDir, string mcver,
+    public static async Task<string> InstallVersionAsync(string gameDir, string mcver, int threads = 8,
         IProgress<InstallProgress>? progress = null, CancellationToken ct = default)
     {
         progress?.Report(new InstallProgress("读取官方版本清单…", 0));
@@ -228,18 +223,18 @@ public static class Installer
         await File.WriteAllTextAsync(Path.Combine(dir, mcver + ".json"), raw.ToJsonString(), ct)
             .ConfigureAwait(false);
 
-        progress?.Report(new InstallProgress("下载客户端 jar…", 0.05));
+        progress?.Report(new InstallProgress("下载客户端 jar…", 0.02));
         await EnsureClientAsync(gameDir, mcver, raw, null, ct).ConfigureAwait(false);
 
-        progress?.Report(new InstallProgress("下载依赖库…", 0.2));
-        await EnsureLibrariesAsync(gameDir, raw, null,
-            (a, b, name) => progress?.Report(new InstallProgress($"依赖库 {a}/{b}  {name}",
-                0.2 + 0.3 * a / Math.Max(1, b))), ct).ConfigureAwait(false);
+        await EnsureLibrariesAsync(gameDir, raw, threads, p =>
+            progress?.Report(new InstallProgress(
+                $"依赖库 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
+                0.05 + 0.35 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct).ConfigureAwait(false);
 
-        progress?.Report(new InstallProgress("下载资源文件（首次较慢，约 4000 个文件）…", 0.5));
-        await EnsureAssetsAsync(gameDir, raw, null,
-            (a, b) => progress?.Report(new InstallProgress($"资源 {a}/{b}",
-                0.5 + 0.5 * a / Math.Max(1, b))), ct).ConfigureAwait(false);
+        await EnsureAssetsAsync(gameDir, raw, threads, p =>
+            progress?.Report(new InstallProgress(
+                $"资源 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
+                0.4 + 0.6 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct).ConfigureAwait(false);
 
         progress?.Report(new InstallProgress("完成", 1.0));
         return mcver;

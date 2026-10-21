@@ -10,6 +10,55 @@ public partial class App : Application
     /// <summary>--selftest：不开界面，跑一遍加载器与模组接口，结果写到临时文件（便于离线核对）。</summary>
     protected override async void OnStartup(StartupEventArgs e)
     {
+        if (e.Args.Contains("--selftest-download"))
+        {
+            var sb = new StringBuilder();
+            try
+            {
+                var manifest = await Http.GetJsonAsync(Installer.ManifestUrl);
+                var entry = (manifest["versions"] as System.Text.Json.Nodes.JsonArray)!
+                    .OfType<System.Text.Json.Nodes.JsonObject>()
+                    .First(v => v["id"]?.ToString() == "1.21.1");
+                var raw = (System.Text.Json.Nodes.JsonObject)await Http.GetJsonAsync(entry["url"]!.ToString());
+                var indexId = raw["assetIndex"]?["id"]?.ToString();
+                var indexUrl = raw["assetIndex"]?["url"]?.ToString();
+                var idxPath = Path.Combine(Path.GetTempPath(), "minelib-assetindex-" + indexId + ".json");
+                await Http.DownloadAsync(indexUrl!, idxPath, null, null);
+                var index = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(idxPath));
+                var objects = (index?["objects"] as System.Text.Json.Nodes.JsonObject)!;
+                sb.AppendLine("asset index " + indexId + " objects=" + objects.Count);
+
+                foreach (var threads in new[] { 1, 8, 16 })
+                {
+                    var dir = Path.Combine(Path.GetTempPath(), "minelib-dltest-" + threads);
+                    if (Directory.Exists(dir)) Directory.Delete(dir, true);
+                    var tasks = new List<Http.DownloadTask>();
+                    foreach (var kv in objects.Take(200))
+                    {
+                        var hash = kv.Value?["hash"]?.ToString() ?? "";
+                        if (hash.Length < 2) continue;
+                        tasks.Add(new Http.DownloadTask($"https://resources.download.minecraft.net/{hash[..2]}/{hash}",
+                            Path.Combine(dir, hash[..2], hash), hash,
+                            kv.Value?["size"]?.GetValue<long>() ?? 0));
+                    }
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var (ok, failed) = await Http.DownloadManyAsync(tasks, threads, null, CancellationToken.None);
+                    sw.Stop();
+                    var bytes = tasks.Sum(t => t.Size);
+                    sb.AppendLine($"线程 {threads,2}: {tasks.Count} 个文件 ok={ok} failed={failed} " +
+                                  $"{bytes / 1024.0 / 1024.0:0.0} MB 用时 {sw.Elapsed.TotalSeconds:0.0}s " +
+                                  $"= {bytes / 1024.0 / sw.Elapsed.TotalSeconds:0.0} KB/s");
+                    Directory.Delete(dir, true);
+                }
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("download selftest FAIL " + ex.Message);
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-dlspeed.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         if (e.Args.Contains("--selftest"))
         {
             var sb = new StringBuilder();

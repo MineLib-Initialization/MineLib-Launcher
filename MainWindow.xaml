@@ -202,6 +202,10 @@
                       <CheckBox x:Name="ChkIsolation" Content="版本隔离" Click="OnIsolationChanged"
                                 Margin="0,0,0,8" />
                       <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="下载线程" Style="{StaticResource KvLabel}" />
+                        <ComboBox x:Name="ThreadsCombo" Width="74" SelectionChanged="OnThreadsChanged" />
+                      </StackPanel>
+                      <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                         <Button Content="选择 Java" Click="OnPickJavaClick" Padding="10,3" Margin="0,0,6,0" />
                         <Button Content="更改目录" Click="OnPickGameDirClick" Padding="10,3" />
                       </StackPanel>

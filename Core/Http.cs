@@ -112,6 +112,113 @@ public static class Http
         }
     }
 
+    public sealed record DownloadTask(string Url, string Dest, string? Sha1, long Size);
+
+    public sealed record BulkProgress(int FilesDone, int FilesTotal, long BytesDone, long BytesTotal,
+        double BytesPerSecond)
+    {
+        public string SpeedText => BytesPerSecond >= 1048576
+            ? (BytesPerSecond / 1048576).ToString("0.0") + " MB/s"
+            : (BytesPerSecond / 1024).ToString("0.0") + " KB/s";
+    }
+
+    /// <summary>
+    /// 并发下载一批文件。资源文件动辄几千个小文件，串行下载是纯浪费 —— 这里开 N 个并发连接，
+    /// 汇总进度（已完成文件数 + 总字节 + 实时速度）。已存在的文件直接跳过。
+    /// </summary>
+    public static async Task<(int ok, int failed)> DownloadManyAsync(IReadOnlyList<DownloadTask> tasks,
+        int concurrency, IProgress<BulkProgress>? progress, CancellationToken ct)
+    {
+        if (tasks.Count == 0) return (0, 0);
+        concurrency = Math.Clamp(concurrency, 1, 32);
+
+        var total = tasks.Count;
+        var totalBytes = tasks.Sum(t => Math.Max(0, t.Size));
+        int done = 0, ok = 0, failed = 0;
+        long bytes = 0;
+        var started = DateTime.UtcNow;
+        var gate = new object();
+
+        void Report()
+        {
+            if (progress is null) return;
+            var secs = Math.Max(0.001, (DateTime.UtcNow - started).TotalSeconds);
+            var snapshot = new BulkProgress(Volatile.Read(ref done), total, Interlocked.Read(ref bytes),
+                totalBytes, Interlocked.Read(ref bytes) / secs);
+            progress.Report(snapshot);
+        }
+
+        using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var timer = Task.Run(async () =>
+        {
+            while (!timerCts.IsCancellationRequested)
+            {
+                try { await Task.Delay(400, timerCts.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+                Report();
+            }
+        }, CancellationToken.None);
+
+        var semaphore = new SemaphoreSlim(concurrency, concurrency);
+        var workers = new List<Task>(total);
+
+        foreach (var t in tasks)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (File.Exists(t.Dest) && (t.Sha1 is null || Sha1Of(t.Dest) == t.Sha1))
+            {
+                Interlocked.Increment(ref done);
+                Interlocked.Increment(ref ok);
+                Interlocked.Add(ref bytes, Math.Max(0, t.Size));
+                continue;
+            }
+
+            await semaphore.WaitAsync(ct).ConfigureAwait(false);
+            workers.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    var fine = await DownloadAsync(t.Url, t.Dest, t.Sha1, null, ct).ConfigureAwait(false);
+                    if (fine)
+                    {
+                        Interlocked.Increment(ref ok);
+                        Interlocked.Add(ref bytes, Math.Max(0, t.Size));
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref failed);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    Interlocked.Increment(ref failed);
+                }
+                finally
+                {
+                    Interlocked.Increment(ref done);
+                    semaphore.Release();
+                }
+            }, ct));
+        }
+
+        try
+        {
+            await Task.WhenAll(workers).ConfigureAwait(false);
+        }
+        finally
+        {
+            timerCts.Cancel();
+            try { await timer.ConfigureAwait(false); } catch (Exception) { }
+            semaphore.Dispose();
+        }
+        Report();
+        return (ok, failed);
+    }
+
     public static string Sha1Of(string path)
     {
         using var fs = File.OpenRead(path);

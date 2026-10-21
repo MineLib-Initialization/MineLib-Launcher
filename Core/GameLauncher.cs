@@ -12,7 +12,8 @@ public sealed class LaunchException : Exception
 public static class GameLauncher
 {
     public static async Task<Installer.MissingFiles> PrepareAsync(string gameDir, string vid,
-        JsonObject merged, IProgress<InstallProgress>? progress = null, CancellationToken ct = default)
+        JsonObject merged, int threads = 8, IProgress<InstallProgress>? progress = null,
+        CancellationToken ct = default)
     {
         var miss = Installer.ScanMissing(gameDir, vid, merged);
         if (miss.Client)
@@ -23,10 +24,9 @@ public static class GameLauncher
         if (miss.Libraries.Count > 0)
         {
             progress?.Report(new InstallProgress("补齐依赖库…", 0.1));
-            await Installer.EnsureLibrariesAsync(gameDir, merged, null,
-                (a, b, name) => progress?.Report(
-                    new InstallProgress($"依赖库 {a}/{b}  {name}", 0.1 + 0.4 * a / Math.Max(1, b))), ct)
-                .ConfigureAwait(false);
+            await Installer.EnsureLibrariesAsync(gameDir, merged, threads, p => progress?.Report(
+                    new InstallProgress($"依赖库 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
+                        0.1 + 0.4 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct).ConfigureAwait(false);
         }
         var indexId = merged["assetIndex"]?["id"]?.ToString();
         if (!string.IsNullOrEmpty(indexId))
@@ -35,9 +35,9 @@ public static class GameLauncher
             if (!File.Exists(idx))
             {
                 progress?.Report(new InstallProgress("下载资源索引…", 0.5));
-                await Installer.EnsureAssetsAsync(gameDir, merged, null,
-                    (a, b) => progress?.Report(new InstallProgress($"资源 {a}/{b}",
-                        0.5 + 0.5 * a / Math.Max(1, b))), ct).ConfigureAwait(false);
+                await Installer.EnsureAssetsAsync(gameDir, merged, threads, p => progress?.Report(
+                        new InstallProgress($"资源 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
+                            0.5 + 0.5 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct).ConfigureAwait(false);
             }
         }
         return miss;
