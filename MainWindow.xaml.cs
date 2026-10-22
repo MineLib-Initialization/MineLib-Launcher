@@ -33,6 +33,41 @@ public partial class MainWindow : Window
 
     public sealed record OfficialVersion(string Id, string Type, string ReleaseTime);
 
+    // ---------------------------------------------------------------- 窗口
+    private void OnMinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void OnMaximizeClick(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+        UpdateWindowChrome();
+    }
+
+    private void OnCloseClick(object sender, RoutedEventArgs e) => Close();
+
+    private void OnTitleBarMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2)
+        {
+            OnMaximizeClick(sender, e);
+            return;
+        }
+        if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed)
+        {
+            try { DragMove(); } catch (Exception) { }
+        }
+    }
+
+    private void UpdateWindowChrome()
+    {
+        // 无边框窗口最大化时会盖住任务栏、边缘也会溢出屏幕，用一层边距补回来
+        RootBorder.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
+        var maxed = WindowState == WindowState.Maximized;
+        GlyphMax.Visibility = maxed ? Visibility.Collapsed : Visibility.Visible;
+        GlyphRestore.Visibility = maxed ? Visibility.Visible : Visibility.Collapsed;
+        BtnMax.ToolTip = maxed ? "还原" : "最大化";
+    }
+
+
     public MainWindow()
     {
         InitializeComponent();
@@ -47,12 +82,14 @@ public partial class MainWindow : Window
         NewDirBox.Text = Path.Combine(AppConfig.Dir, "instances");
         NewNameBox.Text = "我的客户端";
         RefreshInstanceCombo();
-        ThreadsCombo.ItemsSource = new[] { 4, 8, 16, 32 };
-        var savedThreads = Math.Clamp(_cfg.DownloadThreads, 4, 32);
-        ThreadsCombo.SelectedItem = new[] { 4, 8, 16, 32 }.FirstOrDefault(t => t >= savedThreads);
+        var threadOptions = new[] { 8, 16, 32, 64 };
+        ThreadsCombo.ItemsSource = threadOptions;
+        var savedThreads = Math.Clamp(_cfg.DownloadThreads, 4, 64);
+        ThreadsCombo.SelectedItem = threadOptions.FirstOrDefault(t => t >= savedThreads);
         if (ThreadsCombo.SelectedItem is null) ThreadsCombo.SelectedIndex = 1;
         LblStatusRight.Text = "MineLib " + Updates.Current;
         Bar.Visibility = Visibility.Collapsed;
+        StateChanged += (_, _) => UpdateWindowChrome();
         // 调试：MINELIB_TAB=1/2/3 直接打开账号/日志/下载页，便于离屏核对
         if (int.TryParse(Environment.GetEnvironmentVariable("MINELIB_TAB"), out var startTab))
             Tabs.SelectedIndex = Math.Clamp(startTab, 0, 4);
@@ -149,7 +186,6 @@ public partial class MainWindow : Window
 
     private void OnSearchChanged(object sender, TextChangedEventArgs e)
     {
-        SearchPlaceholder.Visibility = TxtSearch.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         ApplyFilter();
     }
 
@@ -713,6 +749,7 @@ public partial class MainWindow : Window
                 string.Equals(i.Dir, _cfg.GameDir, StringComparison.OrdinalIgnoreCase));
             if (cur is not null) InstanceCombo.SelectedItem = cur;
             else if (_instanceItems.Count > 0) InstanceCombo.SelectedIndex = 0;
+            LblTitleClient.Text = cur?.Name ?? "默认客户端";
         }
         finally
         {
@@ -731,6 +768,7 @@ public partial class MainWindow : Window
         _cfg.Version = "";
         _cfg.Save();
         ValGameDir.Text = _cfg.GameDir;
+        LblTitleClient.Text = inst.Name;
         RefreshVersions();
         _ = DetectJavaAsync();
         SetStatus("已切换到客户端「" + inst.Name + "」", false);
@@ -876,14 +914,19 @@ public partial class MainWindow : Window
         }
     }
 
+    private int _modSearchSeq;
+
     private async Task RunModSearchAsync(int offset)
     {
+        // 连续触发（切页签 + 手动搜索）时，只让最后一次的结果落地，否则慢的那次会盖掉新的
+        var seq = ++_modSearchSeq;
         _modOffset = Math.Max(0, offset);
         LblModStatus.Text = "检索中…";
         try
         {
             var (hits, total) = await Modrinth.SearchAsync(ModSearchBox.Text.Trim(), ModMcBox.Text.Trim(),
                 SelectedModLoader, SelectedSortKey, _modOffset, 20, CancellationToken.None);
+            if (seq != _modSearchSeq) return;
             _modHits = hits;
             _modTotal = total;
             ModList.ItemsSource = null;
@@ -894,7 +937,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            LblModStatus.Text = "检索失败：" + ex.Message;
+            if (seq == _modSearchSeq) LblModStatus.Text = "检索失败：" + ex.Message;
         }
     }
 

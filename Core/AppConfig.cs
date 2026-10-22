@@ -28,7 +28,7 @@ public sealed class AppConfig
     public string JavaPath { get; set; } = "";
     public int MemoryMb { get; set; } = 4096;
     /// <summary>下载并发数。资源文件几千个小文件，串行会慢到不可用。</summary>
-    public int DownloadThreads { get; set; } = 8;
+    public int DownloadThreads { get; set; } = 32;
     public string JvmArgs { get; set; } = "";
     public string Version { get; set; } = "";
     public bool Isolation { get; set; } = true;

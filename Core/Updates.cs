@@ -28,7 +28,9 @@ public static class Updates
     public static string StageDir => Path.Combine(AppContext.BaseDirectory, "MineLib", "update");
     public static string StagedExe => Path.Combine(StageDir, "MineLibLauncher.exe");
 
-    public sealed record UpdateInfo(string Version, string Url, long Size, string Sha256, string Notes);
+    public sealed record UpdateInfo(string Version, string Url, long Size, string Sha256, string Notes,
+        string ExeSha256 = "", string PatchFrom = "", string PatchUrl = "", long PatchSize = 0,
+        string PatchSha256 = "");
 
     public static bool HasStagedUpdate => File.Exists(StagedExe);
 
@@ -58,7 +60,12 @@ public static class Updates
         return new UpdateInfo(version, url,
             node["size"]?.GetValue<long>() ?? 0,
             node["sha256"]?.ToString() ?? "",
-            node["notes"]?.ToString() ?? "");
+            node["notes"]?.ToString() ?? "",
+            node["exe"]?["sha256"]?.ToString() ?? "",
+            node["patch"]?["from"]?.ToString() ?? "",
+            node["patch"]?["url"]?.ToString() ?? "",
+            node["patch"]?["size"]?.GetValue<long>() ?? 0,
+            node["patch"]?["sha256"]?.ToString() ?? "");
     }
 
     /// <summary>下载并暂存新版本；返回暂存的 exe 路径。</summary>
@@ -67,6 +74,47 @@ public static class Updates
     {
         Directory.CreateDirectory(StageDir);
         var zipPath = Path.Combine(StageDir, "update.zip");
+
+        // 先试增量：本地 exe + 小补丁，通常只有几 MB，比整包快一个数量级
+        var localExe = Path.Combine(AppContext.BaseDirectory, "MineLibLauncher.exe");
+        if (!string.IsNullOrEmpty(info.PatchUrl) && info.PatchFrom == Current && File.Exists(localExe))
+        {
+            try
+            {
+                var patchPath = Path.Combine(StageDir, "update.patch");
+                progress?.Report(new InstallProgress(
+                    "下载增量补丁 " + (info.PatchSize / 1048576.0).ToString("0.0") + " MB…", 0));
+                if (await Http.DownloadAsync(info.PatchUrl, patchPath, null, null, ct).ConfigureAwait(false))
+                {
+                    if (string.IsNullOrEmpty(info.PatchSha256) ||
+                        Http.Sha256Of(patchPath) == info.PatchSha256.ToLowerInvariant())
+                    {
+                        log?.Invoke("补丁下载完成，正在本地重建新版本");
+                        var rebuilt = Path.Combine(StageDir, "update.rebuilt.exe");
+                        var sha = await Task.Run(() => Patcher.Apply(localExe, patchPath, rebuilt), ct)
+                            .ConfigureAwait(false);
+                        if (string.IsNullOrEmpty(info.ExeSha256) ||
+                            sha == info.ExeSha256.ToLowerInvariant())
+                        {
+                            File.Move(rebuilt, StagedExe, true);
+                            try { File.Delete(patchPath); } catch (Exception) { }
+                            WriteApplyScript();
+                            WriteNotes(info);
+                            log?.Invoke("增量更新已就绪（校验通过）");
+                            progress?.Report(new InstallProgress("增量更新完成", 1));
+                            return StagedExe;
+                        }
+                        log?.Invoke("重建结果校验不符，改用整包");
+                        try { File.Delete(rebuilt); } catch (Exception) { }
+                    }
+                    try { File.Delete(patchPath); } catch (Exception) { }
+                }
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke("增量更新失败，改用整包：" + ex.Message);
+            }
+        }
 
         progress?.Report(new InstallProgress("下载新版本 " + info.Version + "…", 0));
         var dl = progress is null ? null : new Progress<(long done, long total)>(p =>
@@ -102,14 +150,19 @@ public static class Updates
         File.Delete(zipPath);
         WriteApplyScript();
 
-        // 把这次的更新说明留在暂存目录，新版本启动后取出来告知用户
+        WriteNotes(info);
+        return StagedExe;
+    }
+
+    /// <summary>把这次的更新说明留在暂存目录，新版本启动后取出来告知用户。</summary>
+    private static void WriteNotes(UpdateInfo info)
+    {
         var notePath = Path.Combine(StageDir, "pending-notes.json");
         File.WriteAllText(notePath, new JsonObject
         {
             ["version"] = info.Version,
             ["notes"] = info.Notes
         }.ToJsonString());
-        return StagedExe;
     }
 
     private static void WriteApplyScript()

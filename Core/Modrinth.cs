@@ -14,9 +14,11 @@ public sealed class ModHit
     public long Downloads { get; init; }
     public string Categories { get; init; } = "";
 
-    public string DownloadsText => Downloads >= 10000
-        ? (Downloads / 10000.0).ToString("0.#") + " 万"
-        : Downloads.ToString();
+    public string DownloadsText => Downloads >= 100_000_000
+        ? (Downloads / 100_000_000.0).ToString("0.#") + " 亿"
+        : Downloads >= 10000
+            ? (Downloads / 10000.0).ToString("0.#") + " 万"
+            : Downloads.ToString();
 
     public string Meta => string.Join(" · ", new[] { License, Categories }.Where(s => !string.IsNullOrEmpty(s)));
 }

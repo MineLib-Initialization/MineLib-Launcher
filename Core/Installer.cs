@@ -295,13 +295,15 @@ public static class Installer
         await File.WriteAllTextAsync(Path.Combine(dir, mcver + ".json"), raw.ToJsonString(), ct)
             .ConfigureAwait(false);
 
-        progress?.Report(new InstallProgress("下载客户端 jar…", 0.02));
-        await EnsureClientAsync(gameDir, mcver, raw, null, ct).ConfigureAwait(false);
-
-        await EnsureLibrariesAsync(gameDir, raw, threads, p =>
-            progress?.Report(new InstallProgress(
-                $"依赖库 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
-                0.05 + 0.35 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct).ConfigureAwait(false);
+        // 客户端 jar 和依赖库同时开跑：jar 是单个大文件（分段并发），库是一堆小文件，
+        // 串行会有一头一直在等
+        progress?.Report(new InstallProgress("下载客户端与依赖库…", 0.02));
+        await Task.WhenAll(
+            EnsureClientAsync(gameDir, mcver, raw, null, ct),
+            EnsureLibrariesAsync(gameDir, raw, threads, p =>
+                progress?.Report(new InstallProgress(
+                    $"依赖库 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
+                    0.05 + 0.35 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct)).ConfigureAwait(false);
 
         await EnsureAssetsAsync(gameDir, raw, threads, p =>
             progress?.Report(new InstallProgress(

@@ -10,6 +10,38 @@ public partial class App : Application
     /// <summary>--selftest：不开界面，跑一遍加载器与模组接口，结果写到临时文件（便于离线核对）。</summary>
     protected override async void OnStartup(StartupEventArgs e)
     {
+        // 发布用：--mkpatch <旧exe> <新exe> <输出补丁> 生成增量补丁，不显示界面
+        var patchIdx = Array.IndexOf(e.Args, "--mkpatch");
+        if (patchIdx > 0 && e.Args.Length > patchIdx + 3)
+        {
+            var sb = new StringBuilder();
+            try
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var info = Patcher.Create(e.Args[patchIdx + 1], e.Args[patchIdx + 2], e.Args[patchIdx + 3]);
+                sw.Stop();
+                // 当场回放一遍补丁，确认重建结果与目标文件逐字节一致
+                var checkPath = e.Args[patchIdx + 3] + ".check";
+                var rebuilt = Patcher.Apply(e.Args[patchIdx + 1], e.Args[patchIdx + 3], checkPath);
+                var target = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    File.ReadAllBytes(e.Args[patchIdx + 2]))).ToLowerInvariant();
+                sb.AppendLine("回放校验 = " + (rebuilt == target ? "通过" : "失败"));
+                try { File.Delete(checkPath); } catch (Exception) { }
+                sb.AppendLine("patch = " + info.Path);
+                sb.AppendLine("补丁大小 = " + (info.PatchBytes / 1048576.0).ToString("0.00") + " MB");
+                sb.AppendLine("字面量 = " + (info.LiteralBytes / 1048576.0).ToString("0.00") + " MB");
+                sb.AppendLine("目标 sha256 = " + info.TargetSha256);
+                sb.AppendLine("目标大小 = " + info.TargetSize + "  基线大小 = " + info.BaseSize);
+                sb.AppendLine("用时 = " + sw.Elapsed.TotalSeconds.ToString("0.0") + "s");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("MKPATCH FAIL " + ex.Message);
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-patch.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         if (e.Args.Contains("--selftest-java"))
         {
             var sb = new StringBuilder();
@@ -267,31 +299,59 @@ public partial class App : Application
         if (e.Args.Contains("--selftest-download"))
         {
             var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-dlspeed");
             try
             {
+                Directory.CreateDirectory(work);
                 var manifest = await Http.GetJsonAsync(Installer.ManifestUrl);
                 var entry = (manifest["versions"] as System.Text.Json.Nodes.JsonArray)!
                     .OfType<System.Text.Json.Nodes.JsonObject>()
                     .First(v => v["id"]?.ToString() == "1.21.1");
                 var raw = (System.Text.Json.Nodes.JsonObject)await Http.GetJsonAsync(entry["url"]!.ToString());
+
+                // ---- 单个大文件：客户端 jar。单流 vs 分段并发，都从零开始 ----
+                var jarUrl = raw["downloads"]?["client"]?["url"]?.ToString();
+                var jarSize = raw["downloads"]?["client"]?["size"]?.GetValue<long>() ?? 0;
+                sb.AppendLine("client jar " + (jarSize / 1048576.0).ToString("0.0") + " MB");
+                if (!string.IsNullOrEmpty(jarUrl) && jarSize > 0)
+                {
+                    var single = Path.Combine(work, "client-single.jar");
+                    if (File.Exists(single)) File.Delete(single);
+                    var sw1 = System.Diagnostics.Stopwatch.StartNew();
+                    var ok1 = await Http.DownloadSingleStreamAsync(jarUrl!, single);
+                    sw1.Stop();
+                    sb.AppendLine("单连接    ok=" + ok1 + "  用时 " + sw1.Elapsed.TotalSeconds.ToString("0.0") +
+                                  "s  = " + (jarSize / 1024.0 / sw1.Elapsed.TotalSeconds).ToString("0.0") + " KB/s");
+
+                    var multi = Path.Combine(work, "client-multi.jar");
+                    if (File.Exists(multi)) File.Delete(multi);
+                    var sw2 = System.Diagnostics.Stopwatch.StartNew();
+                    var ok2 = await Http.DownloadAsync(jarUrl!, multi, raw["downloads"]?["client"]?["sha1"]?.ToString());
+                    sw2.Stop();
+                    sb.AppendLine("分段并发  ok=" + ok2 + "  用时 " + sw2.Elapsed.TotalSeconds.ToString("0.0") +
+                                  "s  = " + (jarSize / 1024.0 / sw2.Elapsed.TotalSeconds).ToString("0.0") + " KB/s" +
+                                  "  加速 " + (sw1.Elapsed.TotalSeconds / Math.Max(0.01, sw2.Elapsed.TotalSeconds)).ToString("0.0") + "x");
+                }
+
+                // ---- 小文件海量并发 ----
                 var indexId = raw["assetIndex"]?["id"]?.ToString();
                 var indexUrl = raw["assetIndex"]?["url"]?.ToString();
-                var idxPath = Path.Combine(Path.GetTempPath(), "minelib-assetindex-" + indexId + ".json");
+                var idxPath = Path.Combine(work, "assets-" + indexId + ".json");
                 await Http.DownloadAsync(indexUrl!, idxPath, null, null);
                 var index = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(idxPath));
                 var objects = (index?["objects"] as System.Text.Json.Nodes.JsonObject)!;
                 sb.AppendLine("asset index " + indexId + " objects=" + objects.Count);
 
-                foreach (var threads in new[] { 1, 8, 16 })
+                foreach (var threads in new[] { 1, 8, 16, 32, 64 })
                 {
-                    var dir = Path.Combine(Path.GetTempPath(), "minelib-dltest-" + threads);
+                    var dir = Path.Combine(work, "t" + threads);
                     if (Directory.Exists(dir)) Directory.Delete(dir, true);
                     var tasks = new List<Http.DownloadTask>();
-                    foreach (var kv in objects.Take(200))
+                    foreach (var kv in objects.Take(300))
                     {
                         var hash = kv.Value?["hash"]?.ToString() ?? "";
                         if (hash.Length < 2) continue;
-                        tasks.Add(new Http.DownloadTask($"https://resources.download.minecraft.net/{hash[..2]}/{hash}",
+                        tasks.Add(new Http.DownloadTask("https://resources.download.minecraft.net/" + hash[..2] + "/" + hash,
                             Path.Combine(dir, hash[..2], hash), hash,
                             kv.Value?["size"]?.GetValue<long>() ?? 0));
                     }
@@ -299,11 +359,13 @@ public partial class App : Application
                     var (ok, failed) = await Http.DownloadManyAsync(tasks, threads, null, CancellationToken.None);
                     sw.Stop();
                     var bytes = tasks.Sum(t => t.Size);
-                    sb.AppendLine($"线程 {threads,2}: {tasks.Count} 个文件 ok={ok} failed={failed} " +
-                                  $"{bytes / 1024.0 / 1024.0:0.0} MB 用时 {sw.Elapsed.TotalSeconds:0.0}s " +
-                                  $"= {bytes / 1024.0 / sw.Elapsed.TotalSeconds:0.0} KB/s");
+                    sb.AppendLine("线程 " + threads.ToString().PadLeft(2) + ": " + tasks.Count + " 个文件 ok=" + ok +
+                                  " failed=" + failed + "  " + (bytes / 1024.0 / 1024.0).ToString("0.0") + " MB  用时 " +
+                                  sw.Elapsed.TotalSeconds.ToString("0.0") + "s  = " +
+                                  (bytes / 1024.0 / sw.Elapsed.TotalSeconds).ToString("0.0") + " KB/s");
                     Directory.Delete(dir, true);
                 }
+                Directory.Delete(work, true);
             }
             catch (Exception ex)
             {

@@ -16,18 +16,21 @@ public static class GameLauncher
         CancellationToken ct = default)
     {
         var miss = Installer.ScanMissing(gameDir, vid, merged);
+        // jar 与库并行补齐：两者互相独立，串行只是白等
+        var fixups = new List<Task>();
         if (miss.Client)
         {
             progress?.Report(new InstallProgress("补齐客户端 jar…", 0));
-            await Installer.EnsureClientAsync(gameDir, vid, merged, null, ct).ConfigureAwait(false);
+            fixups.Add(Installer.EnsureClientAsync(gameDir, vid, merged, null, ct));
         }
         if (miss.Libraries.Count > 0)
         {
             progress?.Report(new InstallProgress("补齐依赖库…", 0.1));
-            await Installer.EnsureLibrariesAsync(gameDir, merged, threads, p => progress?.Report(
-                    new InstallProgress($"依赖库 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
-                        0.1 + 0.4 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct).ConfigureAwait(false);
+            fixups.Add(Installer.EnsureLibrariesAsync(gameDir, merged, threads, p => progress?.Report(
+                new InstallProgress($"依赖库 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
+                    0.1 + 0.4 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct));
         }
+        if (fixups.Count > 0) await Task.WhenAll(fixups).ConfigureAwait(false);
         var indexId = merged["assetIndex"]?["id"]?.ToString();
         if (!string.IsNullOrEmpty(indexId))
         {
