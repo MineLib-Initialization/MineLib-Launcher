@@ -10,6 +10,34 @@ public partial class App : Application
     /// <summary>--selftest：不开界面，跑一遍加载器与模组接口，结果写到临时文件（便于离线核对）。</summary>
     protected override async void OnStartup(StartupEventArgs e)
     {
+        if (e.Args.Contains("--selftest-java"))
+        {
+            var sb = new StringBuilder();
+            var idx = Array.IndexOf(e.Args, "--selftest-java");
+            var need = idx + 1 < e.Args.Length ? int.Parse(e.Args[idx + 1]) : 17;
+            try
+            {
+                sb.AppendLine("程序目录: " + AppContext.BaseDirectory);
+                sb.AppendLine("Java 根目录: " + JavaProvisioner.Root);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var got = await JavaProvisioner.EnsureAsync(need, new Progress<InstallProgress>(p =>
+                {
+                    if (p.Fraction is > 0 and < 1) sb.AppendLine("  " + p.Stage);
+                }), line => sb.AppendLine("  " + line), CancellationToken.None);
+                sw.Stop();
+                sb.AppendLine("结果: exe=" + got.exe);
+                sb.AppendLine("      major=" + got.major + "  用时=" + sw.Elapsed.TotalSeconds.ToString("0") + "s");
+                var second = JavaFinder.Find("", Path.GetTempPath(), need);
+                sb.AppendLine("JavaFinder 是否能找到它: " + second.note + "  -> " + second.exe);
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("JAVA SELFTEST FAIL " + ex.Message);
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-java.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         if (e.Args.Contains("--selftest-create"))
         {
             var sb = new StringBuilder();

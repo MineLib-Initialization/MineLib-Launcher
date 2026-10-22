@@ -231,6 +231,8 @@
                       </StackPanel>
                       <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                         <Button Content="选择 Java" Click="OnPickJavaClick" Padding="10,3" Margin="0,0,6,0" />
+                        <Button x:Name="BtnFetchJava" Content="下载 Java" Click="OnFetchJavaClick"
+                                Padding="10,3" Margin="0,0,6,0" />
                         <Button Content="更改目录" Click="OnPickGameDirClick" Padding="10,3" />
                       </StackPanel>
                       <TextBlock Text="附加 JVM 参数" Style="{StaticResource Dim}" Margin="0,0,0,4" />

@@ -214,6 +214,38 @@ public partial class MainWindow : Window
             SetStatus(string.IsNullOrEmpty(result.exe) ? "没有找到 Java，请安装 Java 21" : "就绪", false);
     }
 
+    private async void OnFetchJavaClick(object sender, RoutedEventArgs e)
+    {
+        var needMajor = _merged?["javaVersion"]?["majorVersion"]?.GetValue<int>() ?? 21;
+        BtnFetchJava.IsEnabled = false;
+        Bar.Visibility = Visibility.Visible;
+        _cts = new CancellationTokenSource();
+        var jp = new Progress<InstallProgress>(p =>
+        {
+            SetStatus(p.Stage, true);
+            Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
+        });
+        try
+        {
+            var got = await JavaProvisioner.EnsureAsync(needMajor, jp,
+                line => Dispatcher.BeginInvoke(() => AppendLog(line)), _cts.Token);
+            _javaExe = got.exe;
+            _javaMajor = got.major;
+            ValJava.Text = got.exe + "  ·  Java " + got.major + "（MineLib 自带）";
+            SetStatus("Java " + got.major + " 已就绪，放在程序目录的 MineLib\\java 下", false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus("获取 Java 失败：" + ex.Message, false);
+            AppendLog("获取 Java 失败：" + ex.Message);
+        }
+        finally
+        {
+            BtnFetchJava.IsEnabled = true;
+            Bar.Visibility = Visibility.Collapsed;
+        }
+    }
+
     private void OnPickJavaClick(object sender, RoutedEventArgs e)
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
@@ -324,11 +356,25 @@ public partial class MainWindow : Window
 
         try
         {
-            if (string.IsNullOrEmpty(_javaExe))
+            var needMajor = _merged["javaVersion"]?["majorVersion"]?.GetValue<int>() ?? 21;
+            if (string.IsNullOrEmpty(_javaExe) || _javaMajor != needMajor)
             {
-                await DetectJavaAsync();
-                if (string.IsNullOrEmpty(_javaExe))
-                    throw new LaunchException("找不到 Java。请安装 Java 21，或在概览页手动指定 javaw.exe。");
+                if (string.IsNullOrEmpty(_javaExe)) await DetectJavaAsync();
+                if (string.IsNullOrEmpty(_javaExe) || _javaMajor != needMajor)
+                {
+                    var jp = new Progress<InstallProgress>(p =>
+                    {
+                        LblStatus.Text = p.Stage;
+                        Bar.Visibility = Visibility.Visible;
+                        Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
+                    });
+                    var got = await JavaProvisioner.EnsureAsync(needMajor, jp,
+                        line => Dispatcher.BeginInvoke(() => AppendLog(line)), _cts.Token);
+                    _javaExe = got.exe;
+                    _javaMajor = got.major;
+                    ValJava.Text = got.exe + "  ·  Java " + got.major + "（MineLib 自带）";
+                    LblStatusRight.Text = "Java " + got.major + " · 内存 " + _cfg.MemoryMb + " MB";
+                }
             }
 
             account = await MicrosoftAuth.EnsureFreshAsync(account, _cts.Token);
@@ -906,11 +952,25 @@ public partial class MainWindow : Window
         var javaExe = "";
         if (kind is not null && Loaders.NeedsJava(kind.Value))
         {
-            if (string.IsNullOrEmpty(_javaExe)) await DetectJavaAsync();
-            if (string.IsNullOrEmpty(_javaExe))
+            var needMajor = 21;
+            try { needMajor = Versions.Resolve(_cfg.GameDir, v.Id)["javaVersion"]?["majorVersion"]?.GetValue<int>() ?? 21; }
+            catch (Exception) { }
+            if (string.IsNullOrEmpty(_javaExe) || _javaMajor != needMajor)
             {
-                LblCreateStatus.Text = "Forge / NeoForge 要用 Java 跑官方安装器，先装 Java 21。";
-                return;
+                LblCreateStatus.Text = "准备 Java " + needMajor + "…";
+                var jp = new Progress<InstallProgress>(p => LblCreateStatus.Text = p.Stage);
+                try
+                {
+                    var got = await JavaProvisioner.EnsureAsync(needMajor, jp,
+                        line => Dispatcher.BeginInvoke(() => AppendLog(line)), CancellationToken.None);
+                    _javaExe = got.exe;
+                    _javaMajor = got.major;
+                }
+                catch (Exception ex)
+                {
+                    LblCreateStatus.Text = "获取 Java 失败：" + ex.Message;
+                    return;
+                }
             }
             javaExe = _javaExe;
         }

@@ -51,6 +51,12 @@ public static class JavaFinder
                 .OrderBy(p => p, StringComparer.Ordinal));
         }
 
+        // 程序目录下自带的运行时（由 JavaProvisioner 下载）
+        var provisioned = Path.Combine(AppContext.BaseDirectory, "MineLib", "java");
+        if (Directory.Exists(provisioned))
+            list.AddRange(Directory.GetFiles(provisioned, ExeName, SearchOption.AllDirectories)
+                .OrderByDescending(p => p, StringComparer.Ordinal));
+
         var pathVar = Environment.GetEnvironmentVariable("PATH") ?? "";
         foreach (var dir in pathVar.Split(';', StringSplitOptions.RemoveEmptyEntries))
         {
