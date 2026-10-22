@@ -51,7 +51,7 @@ public partial class MainWindow : Window
         var savedThreads = Math.Clamp(_cfg.DownloadThreads, 4, 32);
         ThreadsCombo.SelectedItem = new[] { 4, 8, 16, 32 }.FirstOrDefault(t => t >= savedThreads);
         if (ThreadsCombo.SelectedItem is null) ThreadsCombo.SelectedIndex = 1;
-        LblStatusRight.Text = "MineLib 0.1";
+        LblStatusRight.Text = "MineLib " + Updates.Current;
         Bar.Visibility = Visibility.Collapsed;
         // 调试：MINELIB_TAB=1/2/3 直接打开账号/日志/下载页，便于离屏核对
         if (int.TryParse(Environment.GetEnvironmentVariable("MINELIB_TAB"), out var startTab))
@@ -101,6 +101,8 @@ public partial class MainWindow : Window
             RefreshVersions();
             RefreshAccounts();
             _ = DetectJavaAsync();
+            _ = CheckUpdatesAsync(false);
+            ShowAppliedNotes();
         };
         Closing += (_, _) =>
         {
@@ -615,6 +617,82 @@ public partial class MainWindow : Window
         _cfg.Save();
         RefreshAccounts();
         SetStatus("已删除账号 " + a.Name, false);
+    }
+
+    // ---------------------------------------------------------------- 更新
+    private void ShowAppliedNotes()
+    {
+        var applied = Updates.TakeAppliedNotes();
+        if (applied is null) return;
+        var body = string.IsNullOrWhiteSpace(applied.Notes)
+            ? "已更新到 v" + applied.Version + "。"
+            : "本次更新内容：" + Environment.NewLine + Environment.NewLine + applied.Notes;
+        AppendLog("已更新到 v" + applied.Version + "：" + applied.Notes);
+        LblUpdateState.Text = "v" + applied.Version + " 已生效";
+        MessageBox.Show(body, "已更新到 v" + applied.Version + " (" + Updates.Current + ")",
+            MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private Updates.UpdateInfo? _pendingUpdate;
+
+    private async Task CheckUpdatesAsync(bool manual)
+    {
+        if (manual) SetStatus("检查更新…", true);
+        try
+        {
+            var info = await Updates.CheckAsync(CancellationToken.None);
+            if (info is null)
+            {
+                LblUpdateState.Text = "已是最新（" + Updates.Current + "）";
+                if (manual) SetStatus("当前已是最新版本 " + Updates.Current, false);
+                return;
+            }
+
+            _pendingUpdate = info;
+            LblUpdateState.Text = "发现新版本 " + info.Version + "，后台下载中…";
+            SetStatus("发现新版本 " + info.Version + "，正在后台下载", false);
+
+            var progress = new Progress<InstallProgress>(p =>
+            {
+                LblUpdateState.Text = p.Stage;
+                if (manual) Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
+            });
+            await Updates.StageAsync(info, progress,
+                line => Dispatcher.BeginInvoke(() => AppendLog(line)), CancellationToken.None);
+            LblUpdateState.Text = "新版本 " + info.Version + " 已就绪，下次启动自动更新";
+            SetStatus("更新已下载，" + info.Version + " 将在下次启动时生效", false);
+            BtnCheckUpdate.Content = "重启并更新";
+        }
+        catch (Exception ex)
+        {
+            var msg = ex.Message.Split((char)10)[0];
+            LblUpdateState.Text = "检查更新失败：" + msg;
+            if (manual) SetStatus("检查更新失败：" + msg, false);
+        }
+        finally
+        {
+            Bar.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private async void OnCheckUpdateClick(object sender, RoutedEventArgs e)
+    {
+        if (Updates.HasStagedUpdate)
+        {
+            if (Updates.TryApplyStagedAndExit())
+            {
+                Close();
+                return;
+            }
+        }
+        BtnCheckUpdate.IsEnabled = false;
+        Bar.Visibility = Visibility.Visible;
+        try { await CheckUpdatesAsync(true); }
+        finally
+        {
+            BtnCheckUpdate.IsEnabled = true;
+            Bar.Visibility = Visibility.Collapsed;
+        }
     }
 
     // ---------------------------------------------------------------- 客户端（独立实例）

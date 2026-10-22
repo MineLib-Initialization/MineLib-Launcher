@@ -379,6 +379,12 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 有暂存好的新版本：拉起替换脚本并退出，让脚本覆盖 exe 后重新启动
+        if (Updates.TryApplyStagedAndExit())
+        {
+            Shutdown();
+            return;
+        }
         base.OnStartup(e);
     }
 }

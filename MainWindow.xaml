@@ -237,6 +237,13 @@
                       </StackPanel>
                       <TextBlock Text="附加 JVM 参数" Style="{StaticResource Dim}" Margin="0,0,0,4" />
                       <TextBox x:Name="TxtJvm" Height="24" LostFocus="OnJvmChanged" />
+                      <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <Button x:Name="BtnCheckUpdate" Content="检查更新" Click="OnCheckUpdateClick"
+                                Padding="10,3" Margin="0,0,6,0" />
+                        <TextBlock x:Name="LblUpdateState" Text="" Style="{StaticResource Dim}"
+                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="180" />
+                      </StackPanel>
+
                       <TextBlock Text="游戏目录" Style="{StaticResource Dim}" Margin="0,10,0,4" />
                       <TextBlock x:Name="ValGameDir" Text="-" Style="{StaticResource Mono}" TextWrapping="Wrap" />
                     </StackPanel>
