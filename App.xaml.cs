@@ -11,8 +11,9 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         // 发布用：--mkpatch <旧exe> <新exe> <输出补丁> 生成增量补丁，不显示界面
+        // 注意：StartupEventArgs.Args 不含 exe 路径，--mkpatch 的下标是 0
         var patchIdx = Array.IndexOf(e.Args, "--mkpatch");
-        if (patchIdx > 0 && e.Args.Length > patchIdx + 3)
+        if (patchIdx >= 0 && e.Args.Length > patchIdx + 3)
         {
             var sb = new StringBuilder();
             try

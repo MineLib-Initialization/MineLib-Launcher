@@ -117,9 +117,14 @@ public partial class MainWindow : Window
                     await RunModSearchAsync(0);
                     await Task.Delay(1500);
                 }
+                else if (tabIdx == 3)
+                {
+                    // 下载页要等官方版本清单拉回来，不然截到的是空列表
+                    await Task.Delay(6000);
+                }
                 else
                 {
-                    await Task.Delay(1500);
+                    await Task.Delay(1800);
                 }
                 await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
                 var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap(

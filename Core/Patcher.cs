@@ -92,7 +92,7 @@ public static class Patcher
                 if (index.TryGetValue(h, out var src))
                 {
                     w.Write((byte)0);
-                    w.Write(src);
+                    w.Write((long)src);   // 读取端按 Int64 读，写入也必须 8 字节
                     w.Write(len);
                 }
                 else
