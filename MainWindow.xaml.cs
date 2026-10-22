@@ -61,6 +61,41 @@ public partial class MainWindow : Window
             case "ms": RbMicrosoft.IsChecked = true; break;
             case "ygg": RbYggdrasil.IsChecked = true; break;
         }
+        // 宣传用：--shot <tab> <query> <out> 自渲染一张界面图（不依赖屏幕截图）
+        var shotArgs = Environment.GetCommandLineArgs();
+        var shotIdx = Array.IndexOf(shotArgs, "--shot");
+        if (shotIdx > 0 && shotArgs.Length > shotIdx + 3)
+        {
+            var tabIdx = int.Parse(shotArgs[shotIdx + 1]);
+            var query = shotArgs[shotIdx + 2];
+            var outPath = shotArgs[shotIdx + 3];
+            Loaded += async (_, _) =>
+            {
+                Tabs.SelectedIndex = Math.Clamp(tabIdx, 0, 4);
+                if (tabIdx == 4)
+                {
+                    await Task.Delay(600);
+                    if (shotArgs.Length > shotIdx + 4 && shotArgs[shotIdx + 4] == "any") ModMcBox.Text = "";
+                    ModSearchBox.Text = query;
+                    await RunModSearchAsync(0);
+                    await Task.Delay(1500);
+                }
+                else
+                {
+                    await Task.Delay(1500);
+                }
+                await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+                var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                    (int)ActualWidth, (int)ActualHeight, 96, 96,
+                    System.Windows.Media.PixelFormats.Pbgra32);
+                bmp.Render(this);
+                var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
+                using (var fs = File.Create(outPath)) enc.Save(fs);
+                Close();
+            };
+        }
+
         Loaded += (_, _) =>
         {
             RefreshVersions();
