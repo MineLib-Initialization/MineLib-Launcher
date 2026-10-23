@@ -47,6 +47,101 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 启动参数自检：占位符替换、主类、超长 classpath 走 @argfile
+        if (e.Args.Contains("--selftest-args"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-args-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(work, "versions", "t"));
+                var merged = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["id"] = "t",
+                    ["mainClass"] = "net.minecraft.client.main.Main",
+                    ["type"] = "release",
+                    ["assetIndex"] = new System.Text.Json.Nodes.JsonObject { ["id"] = "17" },
+                    ["arguments"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["jvm"] = new System.Text.Json.Nodes.JsonArray
+                        {
+                            "-Djava.library.path=${natives_directory}",
+                            "-cp",
+                            "${classpath}"
+                        },
+                        ["game"] = new System.Text.Json.Nodes.JsonArray
+                        {
+                            "--username",
+                            "${auth_player_name}",
+                            "--version",
+                            "${version_name}",
+                            "--gameDir",
+                            "${game_directory}"
+                        }
+                    }
+                };
+                var acct = new Account { Type = "offline", Name = "测试玩家", Uuid = "0123456789abcdef0123456789abcdef", AccessToken = "0" };
+                var (args, natives) = GameLauncher.BuildCommand(work, "t", merged, acct, "java.exe", 2048, "", work);
+
+                var joined = string.Join(" ", args);
+                var nameOk = joined.Contains("测试玩家");
+                var mainOk = args.Contains("net.minecraft.client.main.Main");
+                var noToken = !joined.Contains("${") && !joined.Contains("#{" + "");
+                var memOk = args.Contains("-Xmx2048m");
+                sb.AppendLine("占位符替换=" + nameOk + " 主类=" + mainOk + " 无残留占位符=" + noToken + " 内存=" + memOk);
+
+                // 超长 classpath：造 400 个真实存在的库文件，让 classpath 超过 30000 字符
+                var libs = new System.Text.Json.Nodes.JsonArray();
+                long cpLen = 0;
+                for (var i = 0; i < 400; i++)
+                {
+                    var rel = Path.Combine("very" + i.ToString("000"), "longlibraryname-" + i.ToString("000") + ".jar");
+                    var full = Path.Combine(work, "libraries", rel);
+                    Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                    File.WriteAllText(full, "x");
+                    cpLen += full.Length + 1;
+                    libs.Add(new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["name"] = "group:artifact" + i + ":1.0",
+                        ["downloads"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["artifact"] = new System.Text.Json.Nodes.JsonObject { ["path"] = rel }
+                        }
+                    });
+                }
+                ((System.Text.Json.Nodes.JsonObject)merged["arguments"]!)["jvm"] =
+                    new System.Text.Json.Nodes.JsonArray("-cp", "${classpath}");
+                merged["libraries"] = libs;
+                var (args2, _) = GameLauncher.BuildCommand(work, "t", merged, acct, "java.exe", 2048, "", work);
+                var atArg = args2.FirstOrDefault(a => a.StartsWith("@", StringComparison.Ordinal));
+                var argFileOk = false;
+                if (atArg is not null)
+                {
+                    var path = atArg[1..];
+                    if (File.Exists(path))
+                    {
+                        var text = File.ReadAllText(path);
+                        argFileOk = text.Contains("-cp") && text.Length > 30000;
+                    }
+                }
+                sb.AppendLine("超长 classpath（约 " + cpLen + " 字符）→ argfile=" + (atArg ?? "无") +
+                              " 文件有效=" + argFileOk);
+
+                var ok = nameOk && mainOk && memOk && argFileOk;
+                sb.AppendLine(ok ? "ARGS SELFTEST PASS" : "ARGS SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("ARGS SELFTEST FAIL " + ex.Message);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-args.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // 加载器自检：Fabric 真装一次 + 安装器结果识别逻辑
         if (e.Args.Contains("--selftest-loader"))
         {

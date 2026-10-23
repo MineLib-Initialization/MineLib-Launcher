@@ -97,7 +97,35 @@ public static class GameLauncher
         };
 
         var args = new List<string>();
-        if (!string.IsNullOrEmpty(account.Authlib))
+        // Windows 命令行上限约 32K，模组多了 classpath 会超；Java 9+ 支持 @argfile
+        var longClasspath = table["classpath"].Length > 30000;
+        string? argFile = null;
+        if (longClasspath)
+        {
+            argFile = Path.Combine(vdir, "minelib-args.txt");
+            var lines = new List<string>
+            {
+                "-cp",
+                QuoteForArgFile(table["classpath"])
+            };
+            if (!string.IsNullOrEmpty(account.Authlib))
+            {
+                var injector = YggdrasilAuth.FindCachedInjector();
+                if (!string.IsNullOrEmpty(injector))
+                    lines.Insert(0, "-javaagent:" + QuoteForArgFile(injector + "=" + account.Authlib));
+            }
+            try
+            {
+                File.WriteAllLines(argFile, lines, System.Text.Encoding.UTF8);
+            }
+            catch (Exception)
+            {
+                argFile = null;   // 写不了就退回普通模式
+                longClasspath = false;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(account.Authlib) && !longClasspath)
         {
             // 只查本地缓存。以前这里是同步等网络（GetAwaiter().GetResult()），
             // 首次外置登录启动时会把 UI 线程整个卡住；预下载改在 OnLaunchClick 里异步做。
@@ -115,12 +143,13 @@ public static class GameLauncher
         {
             foreach (var node in jvmSection) AppendArg(args, node, table);
         }
-        else
+        else if (!longClasspath)
         {
             args.Add("-Djava.library.path=" + natives);
             args.Add("-cp");
             args.Add(table["classpath"]);
         }
+        if (argFile is not null) args.Add("@" + argFile);
 
         var mainClass = merged["mainClass"]?.ToString();
         if (string.IsNullOrEmpty(mainClass)) throw new LaunchException("版本 json 缺少 mainClass");
@@ -161,6 +190,10 @@ public static class GameLauncher
                 break;
         }
     }
+
+    /// <summary>argfile 里反斜杠要转义，路径带空格要用引号。</summary>
+    private static string QuoteForArgFile(string value) =>
+        "\"" + value.Replace("\\", "\\\\") + "\"";
 
     private static string Substitute(string text, Dictionary<string, string> table)
     {
@@ -225,8 +258,16 @@ public sealed class GameProcess
         _proc.ErrorDataReceived += (_, e) => Push(e.Data);
         _proc.Exited += (_, _) =>
         {
-            var code = _proc?.ExitCode ?? -1;
-            _log?.Dispose();
+            var code = -1;
+            try
+            {
+                code = _proc?.ExitCode ?? -1;
+                // 进程退出后异步读取线程可能还有没读完的输出，等它排空，
+                // 否则崩溃前的最后几行（往往最关键）会丢在日志外面
+                _proc?.WaitForExit();
+            }
+            catch (Exception) { }
+            try { _log?.Flush(); _log?.Dispose(); } catch (Exception) { }
             _log = null;
             Exited?.Invoke(code);
         };
