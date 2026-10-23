@@ -104,7 +104,7 @@ public partial class MainWindow : Window
         NewLoaderCombo.ItemsSource = new[] { "不装（纯原版）", "Fabric", "Quilt", "Forge", "NeoForge" };
         NewLoaderCombo.SelectedIndex = 1;
         NewNameBox.Text = "我的客户端";
-        var threadOptions = new[] { 8, 16, 32, 64 };
+        var threadOptions = new[] { 4, 8, 16, 32, 64 };
         ThreadsCombo.ItemsSource = threadOptions;
         var savedThreads = Math.Clamp(_cfg.DownloadThreads, 4, 64);
         ThreadsCombo.SelectedItem = threadOptions.FirstOrDefault(t => t >= savedThreads);
@@ -113,6 +113,9 @@ public partial class MainWindow : Window
         LblStatusRight.Text = "MineLib " + Updates.Current;
         TxtWindowTitle.Text = _cfg.WindowTitle;
         LblConfigDir.Text = AppConfig.FilePath;
+        LblPortable.Text = Paths.Portable
+            ? "便携模式：配置和客户端都在启动器目录下"
+            : "启动器目录不可写，已回退到用户目录（" + Paths.ConfigDir + "）";
         LblAboutVersion.Text = "MineLib 启动器 " + Updates.Current;
         LblThreadsHint.Text = _cfg.DownloadThreads.ToString();
         ApplyWindowTitle();
@@ -230,14 +233,16 @@ public partial class MainWindow : Window
             try { _createCts?.Cancel(); } catch (Exception) { }
             try { _updateCts.Cancel(); } catch (Exception) { }
             try { Visibility = Visibility.Hidden; } catch (Exception) { }
+            // 控件只能在 UI 线程读，先取好值再交给后台
             var max = _cfg.MemoryMb;
+            var memoryText = TxtMemory.Text;
             var jvm = TxtJvm.Text;
             var iso = ChkIsolation.IsChecked == true;
             _ = Task.Run(() =>
             {
                 try
                 {
-                    _cfg.MemoryMb = int.TryParse(TxtMemory.Text, out var mb) ? Math.Clamp(mb, 512, 32768) : max;
+                    _cfg.MemoryMb = int.TryParse(memoryText, out var mb) ? Math.Clamp(mb, 512, 32768) : max;
                     _cfg.JvmArgs = jvm;
                     _cfg.Isolation = iso;
                     _cfg.Save();
@@ -339,6 +344,7 @@ public partial class MainWindow : Window
     private void ShowVersion(VersionInfo v)
     {
         _current = v;
+        var changed = !string.Equals(_cfg.Version, v.Id, StringComparison.Ordinal);
         _cfg.Version = v.Id;
         var client = _cfg.FindClient(v.Id);
         LblVersionName.Text = string.IsNullOrWhiteSpace(client?.Name) ? v.Id : client!.Name;
@@ -350,6 +356,11 @@ public partial class MainWindow : Window
         ValDir.Text = v.Dir;
         var jar = Path.Combine(v.Dir, v.Id + ".jar");
         ValJar.Text = File.Exists(jar) ? jar : "缺失（启动时会从官方源补齐）";
+        if (changed)
+        {
+            // 选中的版本要立刻写进配置，否则重启后又回到上一次的选择
+            try { _cfg.Save(); } catch (Exception) { }
+        }
 
         try
         {

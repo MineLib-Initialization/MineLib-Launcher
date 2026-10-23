@@ -836,6 +836,8 @@
                                 ToolTip="把当前客户端文件夹整体搬到启动器旁边的 .minecraft" />
                         <TextBlock x:Name="LblConfigDir" Text="" Style="{StaticResource Faint}" TextWrapping="Wrap"
                                    Margin="0,10,0,0" />
+                        <TextBlock x:Name="LblPortable" Text="" Style="{StaticResource Faint}" TextWrapping="Wrap"
+                                   Margin="0,4,0,0" />
                       </StackPanel>
                     </Border>
 
