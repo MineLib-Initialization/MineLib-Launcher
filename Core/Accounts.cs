@@ -340,6 +340,22 @@ public static class YggdrasilAuth
         };
     }
 
+    /// <summary>本地已经下好的 authlib-injector。拼启动参数时只查本地，别在 UI 线程上发请求。</summary>
+    public static string FindCachedInjector()
+    {
+        try
+        {
+            if (!Directory.Exists(LibDir)) return "";
+            return Directory.EnumerateFiles(LibDir, "authlib-injector-*.jar")
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .FirstOrDefault() ?? "";
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+    }
+
     /// <summary>拉 authlib-injector（作者官方 meta，按需下载到本地，不随项目分发）。</summary>
     public static async Task<string> EnsureInjectorAsync(CancellationToken ct = default)
     {

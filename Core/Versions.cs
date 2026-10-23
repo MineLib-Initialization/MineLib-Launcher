@@ -48,23 +48,36 @@ public static class Versions
         var root = VersionsDir(gameDir);
         if (!Directory.Exists(root)) return list;
 
+        // 同一条继承链会被很多版本引用，父版本 json 只读一次，别每个版本都重新解析一遍
+        var parsed = new Dictionary<string, JsonObject?>(StringComparer.OrdinalIgnoreCase);
+        JsonObject? GetVersion(string id)
+        {
+            if (parsed.TryGetValue(id, out var hit)) return hit;
+            var loaded = LoadVersion(gameDir, id);
+            parsed[id] = loaded;
+            return loaded;
+        }
+
         foreach (var dir in Directory.GetDirectories(root))
         {
             var id = Path.GetFileName(dir);
             var json = FindJson(dir, id);
             if (json is null) continue;
             JsonObject raw;
+            string text;
             try
             {
-                raw = (JsonObject)(JsonNode.Parse(File.ReadAllText(json)) ?? new JsonObject());
+                text = File.ReadAllText(json);
+                raw = (JsonObject)(JsonNode.Parse(text) ?? new JsonObject());
             }
             catch (Exception)
             {
                 continue;
             }
+            parsed[id] = raw;
 
             var info = new VersionInfo { Id = id, Dir = dir, JsonPath = json, Raw = raw };
-            info.Loader = DetectLoader(raw);
+            info.Loader = DetectLoader(text);
             info.ReleaseTime = raw["releaseTime"]?.ToString() ?? raw["time"]?.ToString() ?? "";
             info.Mods = CountMods(gameDir, id);
             info.HasJar = File.Exists(Path.Combine(dir, id + ".jar"))
@@ -75,7 +88,7 @@ public static class Versions
             while (cur["inheritsFrom"] is JsonValue pv && guard++ < 12)
             {
                 var parentId = pv.ToString();
-                var parent = LoadVersion(gameDir, parentId);
+                var parent = GetVersion(parentId);
                 if (parent is null)
                 {
                     info.MissingParent = parentId;
@@ -93,15 +106,18 @@ public static class Versions
         return list.OrderByDescending(v => v.ReleaseTime, StringComparer.Ordinal).ToList();
     }
 
-    public static string DetectLoader(JsonObject raw)
+    /// <summary>从版本 json 原文识别加载器。以前是反序列化后再 ToJsonString + ToLowerInvariant，
+    /// 每扫一个版本都要多拷两份几 MB 的字符串，版本一多扫描就很慢。</summary>
+    public static string DetectLoader(string rawJson)
     {
-        var text = raw.ToJsonString().ToLowerInvariant();
-        if (text.Contains("fabricmc")) return "Fabric";
-        if (text.Contains("neoforged")) return "NeoForge";
-        if (text.Contains("net.minecraftforge")) return "Forge";
-        if (text.Contains("optifine")) return "OptiFine";
+        if (rawJson.Contains("fabricmc", StringComparison.OrdinalIgnoreCase)) return "Fabric";
+        if (rawJson.Contains("neoforged", StringComparison.OrdinalIgnoreCase)) return "NeoForge";
+        if (rawJson.Contains("net.minecraftforge", StringComparison.OrdinalIgnoreCase)) return "Forge";
+        if (rawJson.Contains("optifine", StringComparison.OrdinalIgnoreCase)) return "OptiFine";
         return "原版";
     }
+
+    public static string DetectLoader(JsonObject raw) => DetectLoader(raw.ToJsonString());
 
     public static JsonObject? LoadVersion(string gameDir, string id)
     {
@@ -136,7 +152,7 @@ public static class Versions
                  })
         {
             if (Directory.Exists(d))
-                return Directory.GetFiles(d, "*.jar").Length;
+                return Directory.EnumerateFiles(d, "*.jar").Count();
         }
         return 0;
     }

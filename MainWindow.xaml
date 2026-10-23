@@ -456,7 +456,7 @@
                 </Grid.RowDefinitions>
                 <Border Grid.Row="0" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="5"
                         ClipToBounds="True">
-                  <TextBox x:Name="TxtLog" IsReadOnly="True" AcceptsReturn="True"
+                  <TextBox x:Name="TxtLog" IsReadOnly="True" AcceptsReturn="True" IsUndoEnabled="False"
                            FontFamily="{StaticResource MonoFont}" FontSize="12"
                            VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                            TextWrapping="NoWrap" Background="{StaticResource Panel}"

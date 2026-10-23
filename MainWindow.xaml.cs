@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using MineLib.Core;
 
 namespace MineLib;
@@ -89,6 +91,8 @@ public partial class MainWindow : Window
         if (ThreadsCombo.SelectedItem is null) ThreadsCombo.SelectedIndex = 1;
         LblStatusRight.Text = "MineLib " + Updates.Current;
         Bar.Visibility = Visibility.Collapsed;
+        _logTimer.Tick += (_, _) => FlushLog();
+        _logTimer.Start();
         StateChanged += (_, _) => UpdateWindowChrome();
         // 调试：MINELIB_TAB=1/2/3 直接打开账号/日志/下载页，便于离屏核对
         if (int.TryParse(Environment.GetEnvironmentVariable("MINELIB_TAB"), out var startTab))
@@ -138,9 +142,9 @@ public partial class MainWindow : Window
             };
         }
 
-        Loaded += (_, _) =>
+        Loaded += async (_, _) =>
         {
-            RefreshVersions();
+            await RefreshVersionsAsync();
             RefreshAccounts();
             _ = DetectJavaAsync();
             _ = CheckUpdatesAsync(false);
@@ -148,15 +152,33 @@ public partial class MainWindow : Window
         };
         Closing += (_, _) =>
         {
+            _logTimer.Stop();
             SaveSettings();
             _proc?.Stop();
         };
     }
 
     // ---------------------------------------------------------------- 版本列表
-    private void RefreshVersions()
+    private int _versionScanSeq;
+
+    private async Task RefreshVersionsAsync()
     {
-        _all = Versions.Scan(_cfg.GameDir);
+        // 版本扫描要读一堆 json、数 mods；客户端多了以后在 UI 线程做就是整窗卡住
+        var seq = ++_versionScanSeq;
+        var gameDir = _cfg.GameDir;
+        List<VersionInfo> list;
+        try
+        {
+            list = await Task.Run(() => Versions.Scan(gameDir));
+        }
+        catch (Exception ex)
+        {
+            SetStatus("读取版本列表失败：" + ex.Message, false);
+            return;
+        }
+        if (seq != _versionScanSeq) return;
+
+        _all = list;
         ApplyFilter();
         LblVersionCount.Text = _all.Count == 0 ? "版本（没有找到）" : $"版本（{_all.Count}）";
 
@@ -194,9 +216,9 @@ public partial class MainWindow : Window
         ApplyFilter();
     }
 
-    private void OnRefreshClick(object sender, RoutedEventArgs e)
+    private async void OnRefreshClick(object sender, RoutedEventArgs e)
     {
-        RefreshVersions();
+        await RefreshVersionsAsync();
         _ = DetectJavaAsync();
     }
 
@@ -271,7 +293,7 @@ public partial class MainWindow : Window
         try
         {
             var got = await JavaProvisioner.EnsureAsync(needMajor, jp,
-                line => Dispatcher.BeginInvoke(() => AppendLog(line)), _cts.Token);
+                AppendLog, _cts.Token);
             _javaExe = got.exe;
             _javaMajor = got.major;
             ValJava.Text = got.exe + "  ·  Java " + got.major + "（MineLib 自带）";
@@ -304,7 +326,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnPickGameDirClick(object sender, RoutedEventArgs e)
+    private async void OnPickGameDirClick(object sender, RoutedEventArgs e)
     {
         var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "选择游戏目录（.minecraft）" };
         if (Directory.Exists(_cfg.GameDir)) dlg.InitialDirectory = _cfg.GameDir;
@@ -313,7 +335,7 @@ public partial class MainWindow : Window
             _cfg.GameDir = dlg.FolderName;
             _cfg.Save();
             ValGameDir.Text = _cfg.GameDir;
-            RefreshVersions();
+            await RefreshVersionsAsync();
             _ = DetectJavaAsync();
         }
     }
@@ -412,7 +434,7 @@ public partial class MainWindow : Window
                         Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
                     });
                     var got = await JavaProvisioner.EnsureAsync(needMajor, jp,
-                        line => Dispatcher.BeginInvoke(() => AppendLog(line)), _cts.Token);
+                        AppendLog, _cts.Token);
                     _javaExe = got.exe;
                     _javaMajor = got.major;
                     ValJava.Text = got.exe + "  ·  Java " + got.major + "（MineLib 自带）";
@@ -433,6 +455,14 @@ public partial class MainWindow : Window
                 progress, _cts.Token);
             Bar.Value = 0;
 
+            if (!string.IsNullOrEmpty(account.Authlib))
+            {
+                SetStatus("准备 authlib-injector…", true);
+                try { await YggdrasilAuth.EnsureInjectorAsync(_cts.Token); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { AppendLog("authlib-injector 准备失败：" + ex.Message); }
+            }
+
             var runDir = _cfg.Isolation ? _current.Dir : _cfg.GameDir;
             var (args, _) = GameLauncher.BuildCommand(_cfg.GameDir, _current.Id, _merged, account,
                 _javaExe, _cfg.MemoryMb, _cfg.JvmArgs, runDir);
@@ -444,7 +474,7 @@ public partial class MainWindow : Window
             AppendLog("日志文件：" + _logPath);
 
             _proc = new GameProcess();
-            _proc.LineReceived += line => Dispatcher.BeginInvoke(() => AppendLog(line));
+            _proc.LineReceived += AppendLog;
             _proc.Exited += code => Dispatcher.BeginInvoke(() =>
             {
                 BtnLaunch.IsEnabled = true;
@@ -483,20 +513,85 @@ public partial class MainWindow : Window
     }
 
     // ---------------------------------------------------------------- 日志
+    // 游戏和安装器一秒能吐上千行。以前每行都直接 AppendText + ScrollToEnd，还要读一次
+    // TxtLog.Text 判断长度；行一多、日志一长，UI 线程就一直在排版和拷贝字符串，窗口表现为
+    // 卡顿甚至「无响应」。现在任意线程只把日志塞进队列，UI 线程每 100ms 合并刷一次。
+    private readonly object _logLock = new();
+    private readonly Queue<string> _logPending = new();
     private readonly Queue<string> _recent = new();
+    private readonly DispatcherTimer _logTimer = new(DispatcherPriority.Background)
+    {
+        Interval = TimeSpan.FromMilliseconds(100)
+    };
+    private int _logDropped;
+    private int _logChars;
+    private const int MaxPendingLogLines = 2000;
+    private const int LogTrimAt = 400_000;
+    private const int LogKeepAfterTrim = 200_000;
 
     private void AppendLog(string line)
     {
-        if (TxtLog.Text.Length > 400_000) TxtLog.Text = TxtLog.Text[^200_000..];
-        TxtLog.AppendText(line + Environment.NewLine);
-        TxtLog.ScrollToEnd();
-
-        _recent.Enqueue(line.Length > 160 ? line[..160] + "…" : line);
-        while (_recent.Count > 6) _recent.Dequeue();
-        TxtHomeLog.Text = string.Join(Environment.NewLine, _recent);
+        if (string.IsNullOrEmpty(line)) return;
+        lock (_logLock)
+        {
+            if (_logPending.Count >= MaxPendingLogLines)
+            {
+                _logPending.Dequeue();
+                _logDropped++;
+            }
+            _logPending.Enqueue(line);
+            _recent.Enqueue(line.Length > 160 ? line[..160] + "…" : line);
+            while (_recent.Count > 6) _recent.Dequeue();
+        }
     }
 
-    private void OnClearLogClick(object sender, RoutedEventArgs e) => TxtLog.Clear();
+    private void FlushLog()
+    {
+        string batch;
+        string recent;
+        lock (_logLock)
+        {
+            if (_logPending.Count == 0) return;
+            var sb = new StringBuilder(_logPending.Count * 80 + 64);
+            if (_logDropped > 0)
+            {
+                sb.Append("…（日志过多，已省略 ").Append(_logDropped).AppendLine(" 行）");
+                _logDropped = 0;
+            }
+            while (_logPending.Count > 0) sb.AppendLine(_logPending.Dequeue());
+            batch = sb.ToString();
+            recent = string.Join(Environment.NewLine, _recent);
+        }
+
+        TxtLog.AppendText(batch);
+        _logChars += batch.Length;
+        if (_logChars > LogTrimAt)
+        {
+            // 只在越过阈值时整体裁一次；以前每来一行都要读一遍 TxtLog.Text 并重建控件
+            var text = TxtLog.Text;
+            var cut = Math.Max(0, text.Length - LogKeepAfterTrim);
+            if (cut > 0 && char.IsHighSurrogate(text[cut - 1])) cut--;
+            var nl = text.IndexOf('\n', Math.Min(cut, text.Length - 1));
+            if (nl >= 0) cut = nl + 1;
+            TxtLog.Text = text[cut..];
+            _logChars = text.Length - cut;
+        }
+        TxtLog.ScrollToEnd();
+        TxtHomeLog.Text = recent;
+    }
+
+    private void OnClearLogClick(object sender, RoutedEventArgs e)
+    {
+        lock (_logLock)
+        {
+            _logPending.Clear();
+            _recent.Clear();
+            _logDropped = 0;
+        }
+        TxtLog.Clear();
+        _logChars = 0;
+        TxtHomeLog.Text = "";
+    }
 
     private void OnOpenLogFileClick(object sender, RoutedEventArgs e)
     {
@@ -699,7 +794,7 @@ public partial class MainWindow : Window
                 if (manual) Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
             });
             await Updates.StageAsync(info, progress,
-                line => Dispatcher.BeginInvoke(() => AppendLog(line)), CancellationToken.None);
+                AppendLog, CancellationToken.None);
             LblUpdateState.Text = "新版本 " + info.Version + " 已就绪，下次启动自动更新";
             SetStatus("更新已下载，" + info.Version + " 将在下次启动时生效", false);
             BtnCheckUpdate.Content = "重启并更新";
@@ -762,7 +857,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnInstanceChanged(object sender, SelectionChangedEventArgs e)
+    private async void OnInstanceChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_loadingLoaderCombos) return;
         if (InstanceCombo.SelectedItem is not InstanceRef inst) return;
@@ -774,7 +869,7 @@ public partial class MainWindow : Window
         _cfg.Save();
         ValGameDir.Text = _cfg.GameDir;
         LblTitleClient.Text = inst.Name;
-        RefreshVersions();
+        await RefreshVersionsAsync();
         _ = DetectJavaAsync();
         SetStatus("已切换到客户端「" + inst.Name + "」", false);
     }
@@ -787,7 +882,7 @@ public partial class MainWindow : Window
 
     private void OnOpenInstanceDirClick(object sender, RoutedEventArgs e) => OpenFolder(_cfg.GameDir);
 
-    private void OnDeleteInstanceClick(object sender, RoutedEventArgs e)
+    private async void OnDeleteInstanceClick(object sender, RoutedEventArgs e)
     {
         var inst = InstanceCombo.SelectedItem as InstanceRef ?? _cfg.CurrentInstanceRef;
         if (inst is null)
@@ -828,7 +923,7 @@ public partial class MainWindow : Window
 
         RefreshInstanceCombo();
         ValGameDir.Text = _cfg.GameDir;
-        RefreshVersions();
+        await RefreshVersionsAsync();
         SetStatus("已移除客户端「" + inst.Name + "」", false);
 
         if (!Directory.Exists(inst.Dir)) return;
@@ -1088,7 +1183,7 @@ public partial class MainWindow : Window
                 try
                 {
                     var got = await JavaProvisioner.EnsureAsync(needMajor, jp,
-                        line => Dispatcher.BeginInvoke(() => AppendLog(line)), CancellationToken.None);
+                        AppendLog, CancellationToken.None);
                     _javaExe = got.exe;
                     _javaMajor = got.major;
                 }
@@ -1116,12 +1211,12 @@ public partial class MainWindow : Window
         {
             var result = await ClientCreator.CreateAsync(_cfg, NewDirBox.Text, NewNameBox.Text, v.Id,
                 loaderLabel, _cfg.DownloadThreads, javaExe, progress,
-                line => Dispatcher.BeginInvoke(() => AppendLog(line)), _cts.Token);
+                AppendLog, _cts.Token);
 
             ValGameDir.Text = _cfg.GameDir;
             RefreshInstanceCombo();
             InstanceCombo.SelectedItem = _instanceItems.FirstOrDefault(x => x.Dir == result.Dir);
-            RefreshVersions();
+            await RefreshVersionsAsync();
             var made = _all.FirstOrDefault(x => x.Id == result.VersionId);
             if (made is not null)
             {

@@ -342,57 +342,63 @@ public static class Http
         var semaphore = new SemaphoreSlim(concurrency, concurrency);
         var workers = new List<Task>(total);
 
-        foreach (var t in tasks)
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            if (UpToDate(t.Dest, t.Sha1, t.Size))
+            foreach (var t in tasks)
             {
-                Interlocked.Increment(ref done);
-                Interlocked.Increment(ref ok);
-                Interlocked.Add(ref bytes, Math.Max(0, t.Size));
-                continue;
-            }
-
-            await semaphore.WaitAsync(ct).ConfigureAwait(false);
-            workers.Add(Task.Run(async () =>
-            {
-                try
+                ct.ThrowIfCancellationRequested();
+                if (UpToDate(t.Dest, t.Sha1, t.Size))
                 {
-                    var fine = await DownloadAsync(t.Url, t.Dest, t.Sha1, null, ct).ConfigureAwait(false);
-                    if (fine)
+                    Interlocked.Increment(ref done);
+                    Interlocked.Increment(ref ok);
+                    Interlocked.Add(ref bytes, Math.Max(0, t.Size));
+                    continue;
+                }
+
+                // ConfigureAwait(false)：否则每次 await 都回到 UI 线程，接下来整批
+                // UpToDate/SHA1 校验会挂在界面上，窗口就卡住了
+                await semaphore.WaitAsync(ct).ConfigureAwait(false);
+                workers.Add(Task.Run(async () =>
+                {
+                    try
                     {
-                        Interlocked.Increment(ref ok);
-                        Interlocked.Add(ref bytes, Math.Max(0, t.Size));
+                        var fine = await DownloadAsync(t.Url, t.Dest, t.Sha1, null, ct).ConfigureAwait(false);
+                        if (fine)
+                        {
+                            Interlocked.Increment(ref ok);
+                            Interlocked.Add(ref bytes, Math.Max(0, t.Size));
+                        }
+                        else
+                        {
+                            Interlocked.Increment(ref failed);
+                        }
                     }
-                    else
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception)
                     {
                         Interlocked.Increment(ref failed);
                     }
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception)
-                {
-                    Interlocked.Increment(ref failed);
-                }
-                finally
-                {
-                    Interlocked.Increment(ref done);
-                    semaphore.Release();
-                }
-            }, ct));
-        }
+                    finally
+                    {
+                        Interlocked.Increment(ref done);
+                        semaphore.Release();
+                    }
+                }));
+            }
 
-        try
-        {
             await Task.WhenAll(workers).ConfigureAwait(false);
         }
         finally
         {
+            // 取消或异常退出时也必须收掉计时器和已启动的 worker：以前调度循环一抛异常，
+            // 这个每 400ms 向界面汇报一次的循环就永远活着，取消/失败几次后越积越多，
+            // 界面被一堆进度回调拖到卡顿。
             timerCts.Cancel();
             try { await timer.ConfigureAwait(false); } catch (Exception) { }
+            try { await Task.WhenAll(workers).ConfigureAwait(false); } catch (Exception) { }
             semaphore.Dispose();
         }
         Report();
