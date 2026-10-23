@@ -248,13 +248,16 @@ public static class MicrosoftAuth
 
     private static async Task<JsonObject> GetProfileAsync(string token, CancellationToken ct)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Get, McProfileUrl);
-        req.Headers.Add("Authorization", "Bearer " + token);
-        using var resp = await new HttpClient().SendAsync(req, ct).ConfigureAwait(false);
-        var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        if (!resp.IsSuccessStatusCode)
-            throw new AuthException("读取账号档案失败：" + Http.Trim(text));
-        return (JsonObject)(JsonNode.Parse(text) ?? new JsonObject());
+        try
+        {
+            // 用共享 HttpClient：以前每次 new 一个，长期使用会耗端口
+            return (JsonObject)await Http.GetJsonWithBearerAsync(McProfileUrl, token, ct)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new AuthException("读取账号档案失败：" + ex.Message);
+        }
     }
 
     public static async Task<Account> LoginAsync(string clientId, Action<JsonObject> onCode,
@@ -321,7 +324,14 @@ public static class YggdrasilAuth
         }
         catch (HttpRequestException ex)
         {
-            throw new AuthException("外置登录失败：" + ex.Message);
+            var msg = ex.Message ?? "";
+            if (msg.Contains("ForbiddenOperationException", StringComparison.OrdinalIgnoreCase))
+                throw new AuthException("用户名或密码不对（服务器返回 ForbiddenOperationException）。");
+            if (msg.Contains("HTTP 404"))
+                throw new AuthException("API 地址不对：找不到 " + root + "/authserver/authenticate，检查一下地址。");
+            if (msg.Contains("HTTP 403"))
+                throw new AuthException("服务器拒绝登录（403），可能是角色被封禁或需要先在网站上验证邮箱。");
+            throw new AuthException("外置登录失败：" + Http.Trim(msg));
         }
 
         var profile = resp["selectedProfile"];
@@ -365,9 +375,17 @@ public static class YggdrasilAuth
         var url = meta["download_url"]?.ToString();
         if (string.IsNullOrEmpty(url)) throw new AuthException("authlib-injector 元数据缺少下载地址");
         var dest = Path.Combine(LibDir, $"authlib-injector-{version}.jar");
-        if (File.Exists(dest)) return dest;
-        if (!await Http.DownloadAsync(url, dest, null, null, ct).ConfigureAwait(false))
-            throw new AuthException("authlib-injector 下载失败");
-        return dest;
+        if (File.Exists(dest) && new FileInfo(dest).Length > 0) return dest;
+
+        if (await Http.DownloadAsync(url, dest, null, null, ct).ConfigureAwait(false)) return dest;
+
+        // 主站被墙/临时不可用时，退到作者的 GitHub Release（按版本号拼地址）
+        if (!string.IsNullOrEmpty(version))
+        {
+            var alt = "https://github.com/yushijinhun/authlib-injector/releases/download/v" + version +
+                      "/authlib-injector-" + version + ".jar";
+            if (await Http.DownloadAsync(alt, dest, null, null, ct).ConfigureAwait(false)) return dest;
+        }
+        throw new AuthException("authlib-injector 下载失败（主站和 GitHub 都试过了），请检查网络。");
     }
 }

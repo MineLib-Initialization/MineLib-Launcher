@@ -47,6 +47,45 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 账号自检：离线 UUID 是否与 Java 一致、注入器能否就位、外置登录的错误提示
+        if (e.Args.Contains("--selftest-auth"))
+        {
+            var sb = new StringBuilder();
+            try
+            {
+                var uuid = OfflineAuth.UuidFor("Ender_drate");
+                var expect = "b9e4a538-b312-34c3-8c99-88056a1dd440";
+                sb.AppendLine("离线 UUID = " + uuid + "  与 Java 一致=" + (uuid == expect));
+                var a1 = OfflineAuth.Create("测试玩家");
+                var a2 = OfflineAuth.Create("测试玩家");
+                sb.AppendLine("Create 幂等=" + (a1.Uuid == a2.Uuid) + " uuid=" + a1.Uuid + " tokenLen=" + a1.AccessToken.Length);
+
+                var inj = await YggdrasilAuth.EnsureInjectorAsync(CancellationToken.None);
+                var injOk = File.Exists(inj) && new FileInfo(inj).Length > 100_000;
+                var cached = YggdrasilAuth.FindCachedInjector();
+                sb.AppendLine("注入器 = " + Path.GetFileName(inj) + " 有效=" + injOk + " 缓存查找命中=" + (cached == inj));
+
+                var friendly = "";
+                try
+                {
+                    await YggdrasilAuth.LoginAsync("https://launcher.endercraft.top/nope", "u", "p",
+                        CancellationToken.None);
+                }
+                catch (AuthException ex) { friendly = ex.Message; }
+                sb.AppendLine("错误提示 = " + friendly);
+                var friendlyOk = friendly.Contains("API 地址不对") || friendly.Contains("外置登录失败");
+
+                var ok = uuid == expect && a1.Uuid == a2.Uuid && injOk && cached == inj && friendlyOk;
+                sb.AppendLine(ok ? "AUTH SELFTEST PASS" : "AUTH SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("AUTH SELFTEST FAIL " + ex.Message);
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-auth.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // 启动参数自检：占位符替换、主类、超长 classpath 走 @argfile
         if (e.Args.Contains("--selftest-args"))
         {

@@ -57,6 +57,20 @@ public static class Http
         return JsonNode.Parse(text) ?? throw new InvalidDataException("空 JSON: " + url);
     }
 
+    /// <summary>带 Bearer 头的 JSON 获取（微软档案这类接口要用）。</summary>
+    public static async Task<JsonNode> GetJsonWithBearerAsync(string url, string token,
+        CancellationToken ct = default)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Add("Authorization", "Bearer " + token);
+        using var resp = await Client.SendAsync(req, ct).ConfigureAwait(false);
+        var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException("HTTP " + (int)resp.StatusCode + ": " + Trim(text));
+        if (text.Length > 0 && text[0] == '\uFEFF') text = text[1..];
+        return JsonNode.Parse(text) ?? new JsonObject();
+    }
+
     public static async Task<string> GetStringAsync(string url, CancellationToken ct = default)
     {
         using var resp = await Client.GetAsync(url, ct).ConfigureAwait(false);
