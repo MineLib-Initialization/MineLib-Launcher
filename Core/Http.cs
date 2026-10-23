@@ -139,6 +139,8 @@ public static class Http
         }
         catch (OperationCanceledException)
         {
+            // 取消也把半成品删掉，不然反复取消会在 assets 里堆一堆 .part
+            TryDelete(dest + ".part");
             throw;
         }
         catch (Exception)
@@ -292,6 +294,20 @@ public static class Http
             : (BytesPerSecond / 1024).ToString("0.0") + " KB/s";
     }
 
+    /// <summary>便宜判断：文件在且大小对得上。哈希校验交给 worker，避免在调用线程上跑几千次 SHA1。</summary>
+    private static bool LooksPresent(string dest, long size)
+    {
+        try
+        {
+            var fi = new FileInfo(dest);
+            return fi.Exists && size > 0 && fi.Length == size;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     /// <summary>文件已经就位（大小对得上、校验值对得上）就不用再下。</summary>
     public static bool UpToDate(string dest, string? sha1, long size)
     {
@@ -313,8 +329,21 @@ public static class Http
         if (tasks.Count == 0) return (0, 0);
         concurrency = Math.Clamp(concurrency, 1, 64);
 
-        var total = tasks.Count;
-        var totalBytes = tasks.Sum(t => Math.Max(0, t.Size));
+        // 同一个目标只留一个任务：否则两个 worker 会同时写同一个 .part，互相踩成坏文件
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var list = new List<DownloadTask>(tasks.Count);
+        foreach (var t in tasks)
+        {
+            if (t is null || string.IsNullOrEmpty(t.Dest)) continue;
+            string key;
+            try { key = Path.GetFullPath(t.Dest); }
+            catch (Exception) { key = t.Dest; }
+            if (!seen.Add(key)) continue;
+            list.Add(t);
+        }
+
+        var total = list.Count;
+        var totalBytes = list.Sum(t => Math.Max(0, t.Size));
         int done = 0, ok = 0, failed = 0;
         long bytes = 0;
         var started = DateTime.UtcNow;
@@ -344,10 +373,13 @@ public static class Http
 
         try
         {
-            foreach (var t in tasks)
+            foreach (var t in list)
             {
                 ct.ThrowIfCancellationRequested();
-                if (UpToDate(t.Dest, t.Sha1, t.Size))
+                // 有校验值的任务一律交给 worker（它在下载前会先校验 SHA1，顺便把"大小对但内容坏"
+                // 的文件挑出来重下）；只有"没校验值"的任务才在这里按大小跳过。
+                // 关键点：这段在调用线程上跑，不能做哈希。
+                if (t.Sha1 is null && LooksPresent(t.Dest, t.Size))
                 {
                     Interlocked.Increment(ref done);
                     Interlocked.Increment(ref ok);

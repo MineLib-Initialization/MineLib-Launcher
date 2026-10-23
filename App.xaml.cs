@@ -47,6 +47,53 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 下载层自检：重复任务去重、取消后不留 .part、小文件按 sha1 校验
+        if (e.Args.Contains("--selftest-http"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-http-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                Directory.CreateDirectory(work);
+                const string assetUrl = "https://resources.download.minecraft.net/b6/b62ca8ec10d07e6bf5ac8dae0c8c1d2e6a1e3356";
+                const string assetSha = "b62ca8ec10d07e6bf5ac8dae0c8c1d2e6a1e3356";
+                var dest = Path.Combine(work, "asset.bin");
+                var dup = new List<Http.DownloadTask>
+                {
+                    new(assetUrl, dest, assetSha, 9101),
+                    new(assetUrl, dest, assetSha, 9101)
+                };
+                var (ok, failed) = await Http.DownloadManyAsync(dup, 8, null, CancellationToken.None);
+                var shaOk = File.Exists(dest) && Http.Sha1Of(dest) == assetSha;
+                sb.AppendLine($"重复任务：ok={ok} failed={failed} 文件有效={shaOk}（应为 ok=1 failed=0）");
+
+                // 取消：挑个大文件，下 300ms 立刻取消，检查有没有留下 .part
+                var big = Path.Combine(work, "big.bin");
+                using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+                var canceled = false;
+                try
+                {
+                    await Http.DownloadAsync("https://launcher.endercraft.top/launcher/MineLibLauncher-win-x64.zip",
+                        big, null, null, cts.Token);
+                }
+                catch (OperationCanceledException) { canceled = true; }
+                var parts = Directory.GetFiles(work, "*.part", SearchOption.AllDirectories);
+                sb.AppendLine($"取消：已取消={canceled} 残留 .part={parts.Length}（应为 0）");
+                sb.AppendLine(ok == 1 && failed == 0 && shaOk && canceled && parts.Length == 0
+                    ? "HTTP SELFTEST PASS" : "HTTP SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("HTTP SELFTEST FAIL " + ex);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-http.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // 更新替换脚本自检：验证「成功替换」与「复制失败时保留暂存」两条路径
         if (e.Args.Contains("--selftest-update"))
         {
