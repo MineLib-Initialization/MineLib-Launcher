@@ -131,6 +131,22 @@ $newList = @([pscustomobject]$entry) + $list
 New-Item -ItemType Directory -Force -Path $baseDir | Out-Null
 Copy-Item $exe $baseExe -Force
 
+# GitHub Release（public repo，作为备用下载源，也方便别人用包管理器拉）
+try {
+  $notesFile = Join-Path $env:TEMP 'minelib-relnotes.md'
+  $relNotes = if ($Notes) { $Notes } else { 'MineLib 启动器 ' + $Version }
+  [System.IO.File]::WriteAllText($notesFile, $relNotes, (New-Object System.Text.UTF8Encoding($false)))
+  $existing = gh release view ('v' + $Version) --repo MineLib-Initialization/MineLib-Launcher --json tagName 2>$null
+  if (-not $existing) {
+    gh release create ('v' + $Version) $zip --repo MineLib-Initialization/MineLib-Launcher --title ('MineLib 启动器 ' + $Version) --notes-file $notesFile --latest 2>&1 | Out-Null
+    Write-Host ('    GitHub Release v' + $Version + ' ok')
+  } else {
+    Write-Host ('    GitHub Release v' + $Version + ' already exists')
+  }
+} catch {
+  Write-Host ('    GitHub Release failed: ' + $_.Exception.Message)
+}
+
 if (-not $SkipDeploy) {
   Write-Host '7/7 deploy site + commit'
   powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $SiteRoot 'deploy.ps1') | Out-Null
