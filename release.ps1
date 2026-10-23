@@ -1,4 +1,4 @@
-<#
+﻿<#
   MineLib release: bump version -> publish -> zip -> delta patch -> upload -> manifests -> deploy -> commit
   Usage: powershell -ExecutionPolicy Bypass -File .\release.ps1 -Version 0.5.0 -Notes "..." [-SkipDeploy]
 #>
