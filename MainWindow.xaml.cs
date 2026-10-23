@@ -124,6 +124,8 @@ public partial class MainWindow : Window
             else RbSrcOfficial.IsChecked = true;
         }
         finally { _loadingLoaderCombos = false; }
+        EnsureDefaultRoot();
+        RefreshRootCombo();
         Bar.Visibility = Visibility.Collapsed;
         _logTimer.Tick += (_, _) => FlushLog();
         _logTimer.Start();
@@ -313,7 +315,6 @@ public partial class MainWindow : Window
         }
 
         LblVersionCount.Text = "客户端（" + _view.Count + "）";
-        LblRootHint.Text = Path.GetFileName(_cfg.GameDir.TrimEnd('\\'));
         LblCreateRoot.Text = _cfg.GameDir;
     }
 
@@ -577,6 +578,76 @@ public partial class MainWindow : Window
     }
 
     private void OnOpenConfigDirClick(object sender, RoutedEventArgs e) => OpenFolder(AppConfig.Dir);
+
+    /// <summary>把当前客户端文件夹整体搬到启动器目录下的 .minecraft（便携）。</summary>
+    private async void OnMoveRootToLauncherClick(object sender, RoutedEventArgs e)
+    {
+        var src = _cfg.GameDir;
+        var dst = Paths.DefaultGameRoot;
+        if (string.Equals(src.TrimEnd('\\'), dst.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus("当前客户端文件夹已经在启动器目录里了。", false);
+            return;
+        }
+        if (!Directory.Exists(src))
+        {
+            SetStatus("当前客户端文件夹不存在：" + src, false);
+            return;
+        }
+        var sizeMb = 0.0;
+        try
+        {
+            sizeMb = new DirectoryInfo(src).EnumerateFiles("*", SearchOption.AllDirectories)
+                .Sum(f => f.Length) / 1048576.0;
+        }
+        catch (Exception) { }
+        var ok = MessageBox.Show(
+            "把当前客户端文件夹搬到启动器目录？" + Environment.NewLine + Environment.NewLine +
+            "从：" + src + Environment.NewLine +
+            "到：" + dst + Environment.NewLine + Environment.NewLine +
+            "约 " + Math.Round(sizeMb) + " MB。同盘直接改名；目标已存在则按文件合并，不会覆盖已有的。" +
+            Environment.NewLine + Environment.NewLine + "游戏正在运行或文件被占用时可能失败，失败会保留原目录。",
+            "迁移到启动器目录", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (ok != MessageBoxResult.Yes) return;
+
+        if (_proc is { Running: true })
+        {
+            SetStatus("游戏正在运行，先关掉再迁移。", false);
+            return;
+        }
+
+        BtnMoveRoot.IsEnabled = false;
+        try
+        {
+            SetStatus("正在迁移客户端文件夹…", true);
+            var moved = await Task.Run(() => Workspace.MoveRootTo(src, dst, line => AppendLog(line)));
+            _cfg.RemoveRoot(src);
+            var rootEntry = _cfg.RegisterRoot(moved);
+            // 客户端记录跟着搬
+            rootEntry.Clients.Clear();
+            foreach (var v in await Task.Run(() => Versions.Scan(moved)))
+                rootEntry.Clients.Add(new ClientEntry
+                {
+                    VersionId = v.Id,
+                    Name = v.Id,
+                    McVersion = string.IsNullOrEmpty(v.McVersion) ? v.Id : v.McVersion,
+                    Loader = string.IsNullOrEmpty(v.Loader) ? "原版" : v.Loader
+                });
+            _cfg.GameDir = moved;
+            _cfg.Save();
+            RefreshRootCombo();
+            await RefreshVersionsAsync();
+            SetStatus("已迁移到 " + moved, false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus("迁移失败（原目录保留）：" + ex.Message, false);
+        }
+        finally
+        {
+            BtnMoveRoot.IsEnabled = true;
+        }
+    }
 
     private void OnOpenRepoClick(object sender, RoutedEventArgs e)
     {
@@ -1062,6 +1133,72 @@ public partial class MainWindow : Window
         }
     }
 
+    // ---------------------------------------------------------------- 客户端文件夹（根目录）
+    private void EnsureDefaultRoot()
+    {
+        // 便携模式：默认就在启动器目录下的 .minecraft，不存在就建出来
+        if (_cfg.Roots.Count == 0)
+        {
+            try { Directory.CreateDirectory(Paths.DefaultGameRoot); } catch (Exception) { }
+            _cfg.RegisterRoot(Paths.DefaultGameRoot);
+        }
+        else
+        {
+            try { Directory.CreateDirectory(_cfg.GameDir); } catch (Exception) { }
+            _cfg.RegisterRoot(_cfg.GameDir);
+        }
+    }
+
+    private void RefreshRootCombo()
+    {
+        _loadingLoaderCombos = true;
+        try
+        {
+            RootCombo.ItemsSource = null;
+            RootCombo.ItemsSource = _cfg.Roots.ToList();
+            RootCombo.SelectedItem = _cfg.Roots.FirstOrDefault(r =>
+                string.Equals(r.Path, _cfg.GameDir, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            _loadingLoaderCombos = false;
+        }
+        LblRootPath.Text = _cfg.GameDir;
+        LblCreateRoot.Text = _cfg.GameDir;
+        ValGameDir.Text = _cfg.GameDir;
+    }
+
+    private async void OnRootChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingLoaderCombos) return;
+        if (RootCombo.SelectedItem is not RootEntry root) return;
+        if (string.Equals(root.Path, _cfg.GameDir, StringComparison.OrdinalIgnoreCase)) return;
+
+        _cfg.GameDir = root.Path;
+        _cfg.Version = "";
+        _cfg.Save();
+        try { Directory.CreateDirectory(_cfg.GameDir); } catch (Exception) { }
+        RefreshRootCombo();
+        await RefreshVersionsAsync();
+        _ = DetectJavaAsync();
+        SetStatus("已切换到客户端文件夹「" + root.Display + "」", false);
+    }
+
+    private async void OnAddRootClick(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "选一个文件夹当客户端文件夹（里面会放 versions 等）" };
+        try { if (Directory.Exists(_cfg.GameDir)) dlg.InitialDirectory = _cfg.GameDir; } catch (Exception) { }
+        if (dlg.ShowDialog() != true) return;
+        try { Directory.CreateDirectory(dlg.FolderName); } catch (Exception) { }
+        var root = _cfg.RegisterRoot(dlg.FolderName);
+        _cfg.GameDir = root.Path;
+        _cfg.Version = "";
+        _cfg.Save();
+        RefreshRootCombo();
+        await RefreshVersionsAsync();
+        SetStatus("已添加客户端文件夹「" + root.Display + "」", false);
+    }
+
     // ---------------------------------------------------------------- 客户端（= versions 下的版本）
     /// <summary>新建客户端：切到下载页，装进当前游戏根目录。</summary>
     private void OnNewInstanceClick(object sender, RoutedEventArgs e)
@@ -1191,14 +1328,33 @@ public partial class MainWindow : Window
         LblModStatus.Text = "检索中…";
         try
         {
-            var (hits, total) = await Modrinth.SearchAsync(ModSearchBox.Text.Trim(), ModMcBox.Text.Trim(),
+            var mcFilter = ModMcBox.Text.Trim();
+            var (hits, total) = await Modrinth.SearchAsync(ModSearchBox.Text.Trim(), mcFilter,
                 SelectedModLoader, SelectedSortKey, _modOffset, 20, CancellationToken.None);
             if (seq != _modSearchSeq) return;
+
+            // 太新的游戏版本在 Modrinth 上常常一个结果都没有（比如 1.21.11），
+            // 这时候自动放宽一次、去掉版本筛选，别让用户对着空白页发呆
+            var relaxed = false;
+            if (total == 0 && _modOffset == 0 && mcFilter.Length > 0)
+            {
+                var (hits2, total2) = await Modrinth.SearchAsync(ModSearchBox.Text.Trim(), "",
+                    SelectedModLoader, SelectedSortKey, 0, 20, CancellationToken.None);
+                if (seq != _modSearchSeq) return;
+                if (total2 > 0)
+                {
+                    hits = hits2;
+                    total = total2;
+                    relaxed = true;
+                }
+            }
             _modHits = hits;
             _modTotal = total;
             ModList.ItemsSource = null;
             ModList.ItemsSource = _modHits;
-            LblModStatus.Text = $"共 {total} 个结果 · 第 {_modOffset / 20 + 1} / {Math.Max(1, (total + 19) / 20)} 页";
+            LblModStatus.Text = relaxed
+                ? $"游戏版本 {mcFilter} 没有匹配，已忽略版本筛选 · 共 {total} 个结果"
+                : $"共 {total} 个结果 · 第 {_modOffset / 20 + 1} / {Math.Max(1, (total + 19) / 20)} 页";
             ModVersionList.ItemsSource = null;
             _modFiles = new List<ModFile>();
         }

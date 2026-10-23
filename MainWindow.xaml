@@ -128,10 +128,16 @@
 
             <StackPanel Grid.Row="0" Margin="12,12,12,0">
               <DockPanel>
-                <TextBlock DockPanel.Dock="Right" x:Name="LblRootHint" Text="" Style="{StaticResource Faint}"
-                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="120" />
-                <TextBlock Text="客户端" Style="{StaticResource SectionTitle}" Margin="0" />
+                <Button DockPanel.Dock="Right" x:Name="BtnAddRoot" Content="新建" Click="OnAddRootClick"
+                        Padding="8,2" Margin="4,0,0,4" Style="{StaticResource Ghost}"
+                        BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}"
+                        ToolTip="新建一个客户端文件夹（游戏根目录）" />
+                <TextBlock Text="客户端文件夹" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
               </DockPanel>
+              <ComboBox x:Name="RootCombo" DisplayMemberPath="Display" SelectionChanged="OnRootChanged" />
+              <TextBlock x:Name="LblRootPath" Text="" Style="{StaticResource Faint}" Margin="2,4,0,0"
+                         TextTrimming="CharacterEllipsis" ToolTip="当前客户端文件夹路径" />
+              <TextBlock Text="客户端" Style="{StaticResource SectionTitle}" Margin="0,10,0,0" />
             </StackPanel>
 
             <Grid Grid.Row="1" Margin="12,8,12,0">
@@ -817,7 +823,11 @@
                                 BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}" />
                         <Button Content="打开日志文件" Click="OnOpenLogFileClick" HorizontalAlignment="Stretch"
                                 Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
-                                Background="{StaticResource Panel}" />
+                                Background="{StaticResource Panel}" Margin="0,0,0,6" />
+                        <Button x:Name="BtnMoveRoot" Content="迁移到启动器目录" Click="OnMoveRootToLauncherClick"
+                                HorizontalAlignment="Stretch" Style="{StaticResource Ghost}"
+                                BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}"
+                                ToolTip="把当前客户端文件夹整体搬到启动器旁边的 .minecraft" />
                         <TextBlock x:Name="LblConfigDir" Text="" Style="{StaticResource Faint}" TextWrapping="Wrap"
                                    Margin="0,10,0,0" />
                       </StackPanel>

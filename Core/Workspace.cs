@@ -217,7 +217,7 @@ public static class Workspace
     }
 
     /// <summary>递归把 src 合并进 dst：只补 dst 里没有的文件，不覆盖、不删除 src 里的同名文件。</summary>
-    private static int MergeTree(string src, string dst, Action<string>? log)
+    internal static int MergeTree(string src, string dst, Action<string>? log)
     {
         if (!Directory.Exists(src)) return 0;
         var count = 0;
@@ -254,6 +254,71 @@ public static class Workspace
         }
         catch (Exception) { }
         return count;
+    }
+
+    /// <summary>把一个客户端文件夹整体搬到 dst（同盘直接改名，跨盘或目标已存在则合并）。</summary>
+    public static string MoveRootTo(string src, string dst, Action<string>? log)
+    {
+        if (string.IsNullOrWhiteSpace(src) || string.IsNullOrWhiteSpace(dst)) return src;
+        if (string.Equals(src.TrimEnd('\\'), dst.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) return src;
+
+        if (!Directory.Exists(dst))
+        {
+            var parent = Path.GetDirectoryName(dst);
+            if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
+            try
+            {
+                Directory.Move(src, dst);
+                log?.Invoke("已整体移动到 " + dst);
+                PruneEmpty(src);
+                return dst;
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke("整体移动失败，改为逐个合并：" + ex.Message);
+            }
+        }
+
+        Directory.CreateDirectory(dst);
+        // versions 逐个搬，其余共用目录合并
+        var srcVersions = Path.Combine(src, "versions");
+        if (Directory.Exists(srcVersions))
+        {
+            var dstVersions = Path.Combine(dst, "versions");
+            Directory.CreateDirectory(dstVersions);
+            foreach (var dir in Directory.GetDirectories(srcVersions))
+            {
+                var target = Path.Combine(dstVersions, Path.GetFileName(dir));
+                if (Directory.Exists(target))
+                {
+                    MergeTree(dir, target, log);
+                    continue;
+                }
+                try { Directory.Move(dir, target); }
+                catch (Exception) { MergeTree(dir, target, log); }
+            }
+        }
+        foreach (var shared in new[] { "libraries", "assets", "mods", "saves", "resourcepacks", "shaderpacks", "config" })
+            MergeTree(Path.Combine(src, shared), Path.Combine(dst, shared), log);
+        foreach (var f in new[] { "options.txt", "servers.dat", "usercache.json" })
+        {
+            var from = Path.Combine(src, f);
+            var to = Path.Combine(dst, f);
+            try { if (File.Exists(from) && !File.Exists(to)) File.Move(from, to); } catch (Exception) { }
+        }
+        PruneEmpty(src);
+        log?.Invoke("已合并到 " + dst);
+        return dst;
+    }
+
+    private static void PruneEmpty(string dir)
+    {
+        try
+        {
+            if (!Directory.Exists(dir)) return;
+            if (!Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);
+        }
+        catch (Exception) { }
     }
 
     private static bool HasAnyFile(string dir)

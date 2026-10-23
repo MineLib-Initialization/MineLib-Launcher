@@ -32,16 +32,28 @@ public sealed class ClientEntry
         : Name + "  ·  " + McVersion + (Loader == "原版" ? "" : " · " + Loader);
 }
 
-/// <summary>启动器配置，存 %APPDATA%\MineLib\config.json。</summary>
+/// <summary>一个客户端文件夹（游戏根目录）：里面可以并排放多个客户端。</summary>
+public sealed class RootEntry
+{
+    public string Name { get; set; } = "";
+    public string Path { get; set; } = "";
+    public List<ClientEntry> Clients { get; set; } = new();
+
+    public string Display => string.IsNullOrEmpty(Name) ? Path : Name;
+}
+
+/// <summary>启动器配置，默认存 &lt;启动器目录&gt;\MineLibLauncher\config.json（便携）。</summary>
 public sealed class AppConfig
 {
-    public static string Dir =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MineLib");
+    public static string Dir => Paths.ConfigDir;
 
     public static string FilePath => Path.Combine(Dir, "config.json");
 
-    public string GameDir { get; set; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft");
+    /// <summary>当前生效的游戏根目录（= 当前客户端文件夹）。</summary>
+    public string GameDir { get; set; } = Paths.DefaultGameRoot;
+
+    /// <summary>所有客户端文件夹。每个文件夹里可以并排放多个客户端。</summary>
+    public List<RootEntry> Roots { get; set; } = new();
 
     /// <summary>启动器标题（窗口标题与标题栏显示的文字）。</summary>
     public string WindowTitle { get; set; } = "MineLib 启动器";
@@ -56,8 +68,13 @@ public sealed class AppConfig
     public bool Isolation { get; set; } = true;
     public string AzureClientId { get; set; } = "";
     public string LastAccountKey { get; set; } = "";
-    /// <summary>客户端列表：每项对应 versions/ 下的一个版本，所有客户端共用一个游戏根目录。</summary>
-    public List<ClientEntry> Clients { get; set; } = new();
+    /// <summary>旧版字段：单根目录时代的客户端列表；载入时会迁到 Roots 里。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("Clients")]
+    public List<ClientEntry> LegacyClients { get; set; } = new();
+
+    /// <summary>当前客户端文件夹里的客户端。代码里沿用 Clients 这个名字。</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<ClientEntry> Clients => CurrentRoot.Clients;
     /// <summary>是否已经把旧的「一个客户端一个目录」合并成单根目录。</summary>
     public bool SingleRootMigrated { get; set; }
     /// <summary>旧版模型遗留：旧客户端目录登记表，迁移后清空。</summary>
@@ -65,10 +82,84 @@ public sealed class AppConfig
     public string CurrentInstance { get; set; } = "";
     public List<Account> Accounts { get; set; } = new();
 
+    /// <summary>当前客户端文件夹；没有就建一个默认的。</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public RootEntry CurrentRoot
+    {
+        get
+        {
+            Roots ??= new List<RootEntry>();
+            var hit = Roots.FirstOrDefault(r =>
+                string.Equals(r.Path, GameDir, StringComparison.OrdinalIgnoreCase));
+            if (hit is not null)
+            {
+                hit.Clients ??= new List<ClientEntry>();
+                return hit;
+            }
+            hit = new RootEntry { Name = RootName(GameDir), Path = GameDir, Clients = new List<ClientEntry>() };
+            Roots.Add(hit);
+            return hit;
+        }
+    }
+
+    private static string RootName(string path)
+    {
+        try
+        {
+            var trimmed = path.TrimEnd('\\');
+            var name = Path.GetFileName(trimmed);
+            if (string.IsNullOrEmpty(name)) name = trimmed;
+            return name;
+        }
+        catch (Exception)
+        {
+            return path;
+        }
+    }
+
+    /// <summary>登记一个客户端文件夹；已存在就复用。</summary>
+    public RootEntry RegisterRoot(string path, string? name = null)
+    {
+        Roots ??= new List<RootEntry>();
+        var hit = Roots.FirstOrDefault(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (hit is null)
+        {
+            hit = new RootEntry { Name = string.IsNullOrWhiteSpace(name) ? RootName(path) : name!.Trim(), Path = path };
+            Roots.Add(hit);
+        }
+        else if (!string.IsNullOrWhiteSpace(name))
+        {
+            hit.Name = name!.Trim();
+        }
+        hit.Clients ??= new List<ClientEntry>();
+        GameDir = path;
+        Save();
+        return hit;
+    }
+
+    /// <summary>从列表里移除一个客户端文件夹（不删磁盘文件）。</summary>
+    public void RemoveRoot(string path)
+    {
+        Roots?.RemoveAll(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (string.Equals(GameDir, path, StringComparison.OrdinalIgnoreCase))
+            GameDir = Roots?.FirstOrDefault()?.Path ?? Paths.DefaultGameRoot;
+        Save();
+    }
+
     public static AppConfig Load()
     {
         try
         {
+            // 首次便携化：把旧的 %APPDATA%\MineLib\config.json 导过来，别丢账号和设置
+            if (!File.Exists(FilePath) && Paths.Portable && File.Exists(Paths.LegacyConfigPath))
+            {
+                try
+                {
+                    Directory.CreateDirectory(Dir);
+                    File.Copy(Paths.LegacyConfigPath, FilePath, true);
+                }
+                catch (Exception) { }
+            }
             if (File.Exists(FilePath))
             {
                 var text = File.ReadAllText(FilePath);
@@ -79,8 +170,17 @@ public sealed class AppConfig
                         cfg.GameDir = Path.Combine(
                             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft");
                     cfg.Accounts ??= new List<Account>();
-                    cfg.Clients ??= new List<ClientEntry>();
+                    cfg.Roots ??= new List<RootEntry>();
                     cfg.Instances ??= new List<InstanceRef>();
+                    // 单根目录时代的客户端列表，迁进它所属的客户端文件夹
+                    if (cfg.LegacyClients is { Count: > 0 })
+                    {
+                        var rootEntry = cfg.CurrentRoot;
+                        foreach (var c in cfg.LegacyClients)
+                            if (rootEntry.Clients.All(x => !string.Equals(x.VersionId, c.VersionId, StringComparison.OrdinalIgnoreCase)))
+                                rootEntry.Clients.Add(c);
+                        cfg.LegacyClients.Clear();
+                    }
                     return cfg;
                 }
             }
@@ -97,7 +197,7 @@ public sealed class AppConfig
                     if (cfg is not null)
                     {
                         cfg.Accounts ??= new List<Account>();
-                        cfg.Clients ??= new List<ClientEntry>();
+                        cfg.Roots ??= new List<RootEntry>();
                         cfg.Instances ??= new List<InstanceRef>();
                         return cfg;
                     }

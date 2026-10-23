@@ -86,27 +86,62 @@ public static class Versions
             info.HasJar = File.Exists(Path.Combine(dir, id + ".jar"))
                           || File.Exists(Path.Combine(dir, (raw["id"]?.ToString() ?? id) + ".jar"));
 
+            // 候选来源：json 的 clientVersion、自身 id、继承链上每一级的 id、目录名。
+            // 加载器版本的目录名可能是「客户端名字」，直接拿它当版本号会让模组筛选失效。
+            var candidates = new List<string>();
+            var cv = raw["clientVersion"]?.ToString();
+            if (!string.IsNullOrEmpty(cv)) candidates.Add(cv!);
+            var own = raw["id"]?.ToString();
+            if (!string.IsNullOrEmpty(own)) candidates.Add(own!);
+            candidates.Add(id);
+
             var cur = raw;
             var guard = 0;
             while (cur["inheritsFrom"] is JsonValue pv && guard++ < 12)
             {
                 var parentId = pv.ToString();
+                candidates.Add(parentId);
                 var parent = GetVersion(parentId);
                 if (parent is null)
                 {
                     info.MissingParent = parentId;
-                    info.McVersion = parentId;
                     break;
                 }
+                var pid = parent["id"]?.ToString();
+                if (!string.IsNullOrEmpty(pid)) candidates.Add(pid!);
                 cur = parent;
             }
-            if (string.IsNullOrEmpty(info.McVersion))
-                info.McVersion = cur["id"]?.ToString() ?? id;
+            info.McVersion = PickMcVersion(candidates, id);
 
             list.Add(info);
         }
 
         return list.OrderByDescending(v => v.ReleaseTime, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>从一串候选字符串里挑出真正的 Minecraft 版本号（1.21.11 / 1.21 / 24w14a 这种）。</summary>
+    public static string PickMcVersion(IEnumerable<string> candidates, string fallback)
+    {
+        string? loose = null;
+        foreach (var c in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(c)) continue;
+            var s = c.Trim();
+            if (System.Text.RegularExpressions.Regex.IsMatch(s, @"^\d+\.\d+(\.\d+)?$")) return s;
+            if (System.Text.RegularExpressions.Regex.IsMatch(s, @"^\d{2}w\d{2}[a-z]$")) return s;
+            // 兜底：从「1.21.11-Fabric_0.19.3-Fixed」这类串里抠出版本号
+            if (loose is null)
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(s, @"\d+\.\d+(\.\d+)?");
+                if (m.Success) loose = m.Value;
+                else
+                {
+                    var w = System.Text.RegularExpressions.Regex.Match(s, @"\d{2}w\d{2}[a-z]");
+                    if (w.Success) loose = w.Value;
+                }
+            }
+        }
+        return loose ?? fallback;
     }
 
     /// <summary>从版本 json 原文识别加载器。以前是反序列化后再 ToJsonString + ToLowerInvariant，
