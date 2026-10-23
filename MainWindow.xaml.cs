@@ -1364,7 +1364,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            if (seq == _modSearchSeq) LblModStatus.Text = "检索失败：" + ex.Message;
+            if (seq == _modSearchSeq) LblModStatus.Text = "检索失败：" + Modrinth.FriendlyHttpError(ex);
         }
     }
 
@@ -1428,9 +1428,12 @@ public partial class MainWindow : Window
                 if (p.total > 0) ModBar.Value = p.done * 100.0 / p.total;
                 LblModDownload.Text = string.Format("{0} / {1} KB", p.done / 1024, p.total / 1024);
             });
-            var ok = await Modrinth.DownloadAsync(file, dir, progress, CancellationToken.None);
-            LblModDownload.Text = ok ? "已下载到 " + dir : "下载失败（网络或文件已被作者删除）";
-            if (ok) SetStatus("已下载 " + file.Name, false);
+            var (ok, path, skipped) = await Modrinth.DownloadAsync(file, dir, progress, CancellationToken.None);
+            LblModDownload.Text = !ok
+                ? "下载失败（网络或文件已被作者删除）"
+                : skipped ? "这个文件已经在 mods 里了，跳过"
+                : "已保存到 " + Path.GetFileName(path);
+            if (ok) SetStatus((skipped ? "已存在，跳过 " : "已下载 ") + Path.GetFileName(path), false);
         }
         catch (Exception ex)
         {

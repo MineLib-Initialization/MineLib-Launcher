@@ -59,6 +59,18 @@ public static class Modrinth
         ("neoforge", "NeoForge")
     };
 
+    /// <summary>把常见的 HTTP 错误翻成人话（限流、被墙、项目不存在）。</summary>
+    public static string FriendlyHttpError(Exception ex)
+    {
+        var msg = ex.Message ?? "";
+        if (msg.Contains("429")) return "请求太频繁，被 Modrinth 限流了，等几秒再试。";
+        if (msg.Contains("404")) return "Modrinth 上没有这个项目（可能已下架）。";
+        if (msg.Contains("403")) return "Modrinth 拒绝了这次请求（403）。";
+        var code = System.Text.RegularExpressions.Regex.Match(msg, @"HTTP (\d{3})");
+        if (code.Success) return "Modrinth 返回 " + code.Groups[1].Value + "：" + Http.Trim(msg);
+        return Http.Trim(msg);
+    }
+
     public static async Task<(List<ModHit> hits, long total)> SearchAsync(string query, string? mc,
         string? loader, string index, int offset, int limit, CancellationToken ct)
     {
@@ -106,16 +118,17 @@ public static class Modrinth
             query.Add("loaders=" + Uri.EscapeDataString("[\"" + loader + "\"]"));
         if (query.Count > 0) url += "?" + string.Join("&", query);
 
+        // 以前这里吞掉异常，网络/限流都会显示成"没有匹配的文件"，误导性很强
         JsonNode node;
         try
         {
             node = await Http.GetJsonAsync(url, ct).ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return new List<ModFile>();
+            throw new InvalidOperationException("读取文件列表失败：" + FriendlyHttpError(ex), ex);
         }
-        if (node is not JsonArray arr) return new List<ModFile>();
+        if (node is not JsonArray arr) throw new InvalidOperationException("Modrinth 返回的数据格式不对");
 
         var list = new List<ModFile>();
         foreach (var n in arr)
@@ -137,11 +150,33 @@ public static class Modrinth
         return list;
     }
 
-    public static async Task<bool> DownloadAsync(ModFile file, string modsDir,
+    /// <summary>把服务器给的文件名消毒，绝不允许它跳出 mods 目录。</summary>
+    public static string SafeFileName(string raw)
+    {
+        var name = Path.GetFileName(raw ?? "");
+        if (string.IsNullOrWhiteSpace(name)) name = "mod.jar";
+        foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+        name = name.Trim('.', ' ');
+        if (name.Length == 0) name = "mod.jar";
+        if (name.Length > 150) name = name[^150..];
+        return name;
+    }
+
+    public static async Task<(bool ok, string path, bool skipped)> DownloadAsync(ModFile file, string modsDir,
         IProgress<(long done, long total)>? progress, CancellationToken ct)
     {
         Directory.CreateDirectory(modsDir);
-        return await Http.DownloadAsync(file.Url, Path.Combine(modsDir, file.Name), null, progress, ct)
-            .ConfigureAwait(false);
+        var safe = SafeFileName(file.Name);
+        var dest = Path.GetFullPath(Path.Combine(modsDir, safe));
+        // 双保险：消毒后仍要确认落点在 mods 目录内
+        if (!dest.StartsWith(Path.GetFullPath(modsDir).TrimEnd('\\') + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("文件名不合法：" + file.Name);
+
+        if (File.Exists(dest) && file.Size > 0 && new FileInfo(dest).Length == file.Size)
+            return (true, dest, true);   // 已经下过同一份，直接跳过
+
+        var ok = await Http.DownloadAsync(file.Url, dest, null, progress, ct).ConfigureAwait(false);
+        return (ok, dest, false);
     }
 }

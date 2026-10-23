@@ -47,6 +47,66 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // Modrinth 自检：检索、文件列表、下载落盘与文件名消毒
+        if (e.Args.Contains("--selftest-modrinth"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-mr-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                Directory.CreateDirectory(work);
+                var (hits, total) = await Modrinth.SearchAsync("sodium", "1.21.1", "fabric", "relevance", 0, 20,
+                    CancellationToken.None);
+                sb.AppendLine("检索：命中=" + hits.Count + " 总数=" + total + "（应 >0）");
+
+                var target = hits.FirstOrDefault(h => h.Title.Contains("Sodium", StringComparison.OrdinalIgnoreCase))
+                             ?? hits.FirstOrDefault();
+                var files = target is null
+                    ? new List<ModFile>()
+                    : await Modrinth.FilesAsync(target.ProjectId, "1.21.1", "fabric", CancellationToken.None);
+                sb.AppendLine("文件列表：" + files.Count + " 个（应 >0）");
+
+                var sanitizeOk = Modrinth.SafeFileName("..\\..\\evil.jar") == "evil.jar"
+                                 && Modrinth.SafeFileName("a/b\\c?.jar").Length > 0;
+                sb.AppendLine("文件名消毒 = " + sanitizeOk +
+                              "（..\\..\\evil.jar → " + Modrinth.SafeFileName("..\\..\\evil.jar") + "）");
+
+                var downloadOk = false;
+                var skipped = false;
+                if (files.Count > 0)
+                {
+                    var smallest = files.Where(f => f.Size > 0).OrderBy(f => f.Size).FirstOrDefault();
+                    if (smallest is not null)
+                    {
+                        var (ok1, path1, skip1) = await Modrinth.DownloadAsync(smallest, work, null,
+                            CancellationToken.None);
+                        var inside = Path.GetFullPath(path1)
+                            .StartsWith(Path.GetFullPath(work).TrimEnd('\\') + Path.DirectorySeparatorChar,
+                                StringComparison.OrdinalIgnoreCase);
+                        var (ok2, _, skip2) = await Modrinth.DownloadAsync(smallest, work, null,
+                            CancellationToken.None);
+                        downloadOk = ok1 && File.Exists(path1) && inside;
+                        skipped = ok2 && skip2;
+                        sb.AppendLine("下载：" + Path.GetFileName(path1) + " 落盘=" + downloadOk +
+                                      " 二次下载跳过=" + skipped);
+                    }
+                }
+
+                var ok = hits.Count > 0 && files.Count > 0 && sanitizeOk && downloadOk && skipped;
+                sb.AppendLine(ok ? "MODRINTH SELFTEST PASS" : "MODRINTH SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("MODRINTH SELFTEST FAIL " + ex.Message);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-modrinth.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // Java 自检：本机探测（带缓存）、Adoptium 版本映射（含非 LTS 回退）
         if (e.Args.Contains("--selftest-javafind"))
         {
