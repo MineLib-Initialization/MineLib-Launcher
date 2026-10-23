@@ -114,6 +114,9 @@ public partial class MainWindow : Window
         LblAboutVersion.Text = "MineLib 启动器 " + Updates.Current;
         LblThreadsHint.Text = _cfg.DownloadThreads.ToString();
         ApplyWindowTitle();
+        // 面板初始隐藏，内层页签可能没有选中项，内容就不渲染，这里先兜住
+        if (Tabs.SelectedIndex < 0) Tabs.SelectedIndex = 0;
+        if (DownloadTabs.SelectedIndex < 0) DownloadTabs.SelectedIndex = 0;
         _loadingLoaderCombos = true;
         try
         {
@@ -175,6 +178,20 @@ public partial class MainWindow : Window
 
         Loaded += async (_, _) =>
         {
+            // 面板初始是 Collapsed，内层 TabControl 的内容不会被实例化，之后显示就是空白。
+            // 这里先把四个面板都显示一次、走一遍布局，再折叠回去。
+            try
+            {
+                foreach (var p in new FrameworkElement[] { PaneClient, PaneDownload, PaneAccount, PaneSettings })
+                    p.Visibility = Visibility.Visible;
+                UpdateLayout();
+                PaneDownload.Visibility = Visibility.Collapsed;
+                PaneAccount.Visibility = Visibility.Collapsed;
+                PaneSettings.Visibility = Visibility.Collapsed;
+                PaneClient.Visibility = Visibility.Visible;
+            }
+            catch (Exception) { }
+
             // 旧版「一个客户端一个目录」→ 合并成单根目录（只做一次，失败不动原目录）
             try
             {
@@ -199,9 +216,12 @@ public partial class MainWindow : Window
         };
         Closing += (_, _) =>
         {
+            // 先让窗口消失，清理（存配置、收掉游戏进程）放到后面做，
+            // 用户在关窗时不该看到窗口先卡一下再消失
             _logTimer.Stop();
-            SaveSettings();
-            _proc?.Stop();
+            try { Visibility = Visibility.Hidden; } catch (Exception) { }
+            try { SaveSettings(); } catch (Exception) { }
+            try { _proc?.Stop(); } catch (Exception) { }
         };
     }
 
@@ -1224,7 +1244,11 @@ public partial class MainWindow : Window
 
     private void OnGlobalTabClick(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.Tag is string id) ShowPane(id);
+        // 只按控件身份判断：Tag 之前被当成「选中标记」改写过，导致第二次点击认不出是哪个页签
+        if (ReferenceEquals(sender, BtnTabDownload)) ShowPane("download");
+        else if (ReferenceEquals(sender, BtnTabAccount)) ShowPane("account");
+        else if (ReferenceEquals(sender, BtnTabSettings)) ShowPane("settings");
+        else ShowPane("client");
     }
 
     private void ShowPane(string id)
@@ -1249,11 +1273,28 @@ public partial class MainWindow : Window
             if (!ReferenceEquals(p, pane)) p.Visibility = Visibility.Collapsed;
 
         pane.Visibility = Visibility.Visible;
+        // 面板在启动时是 Collapsed，内层页签的选中内容没被实例化；显示后强制定一次布局，
+        // 再重设一次选中项，content presenter 才会把内容画出来
+        pane.UpdateLayout();
+        if (Tabs.SelectedIndex < 0) Tabs.SelectedIndex = 0;
+        if (DownloadTabs.SelectedIndex < 0) DownloadTabs.SelectedIndex = -1;
+        if (DownloadTabs.SelectedIndex < 0) DownloadTabs.SelectedIndex = 0;
+        if (Tabs.SelectedIndex == 0)
+        {
+            var keep = Tabs.SelectedIndex;
+            Tabs.SelectedIndex = -1;
+            Tabs.SelectedIndex = keep;
+        }
         AnimateIn(pane);
         AnimateIndicator(button);
 
         foreach (var b in new[] { BtnTabClient, BtnTabDownload, BtnTabAccount, BtnTabSettings })
-            b.Tag = ReferenceEquals(b, button) ? "active" : "";
+        {
+            var active = ReferenceEquals(b, button);
+            b.Foreground = active ? (System.Windows.Media.Brush)FindResource("Accent")
+                                  : (System.Windows.Media.Brush)FindResource("TextDim");
+            b.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
+        }
 
         if (id == "download" && _official.Count == 0) _ = LoadOfficialAsync();
     }

@@ -481,10 +481,7 @@
               <Setter TargetName="bd" Property="Background" Value="{StaticResource Hover}" />
               <Setter Property="Foreground" Value="{StaticResource Text}" />
             </Trigger>
-            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="active">
-              <Setter Property="Foreground" Value="{StaticResource Accent}" />
-              <Setter Property="FontWeight" Value="SemiBold" />
-            </DataTrigger>
+
           </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
