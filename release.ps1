@@ -136,7 +136,11 @@ try {
   $notesFile = Join-Path $env:TEMP 'minelib-relnotes.md'
   $relNotes = if ($Notes) { $Notes } else { 'MineLib 启动器 ' + $Version }
   [System.IO.File]::WriteAllText($notesFile, $relNotes, (New-Object System.Text.UTF8Encoding($false)))
-  $existing = gh release view ('v' + $Version) --repo MineLib-Initialization/MineLib-Launcher --json tagName 2>$null
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'   # gh 查不到时会往 stderr 写，别让它变成终止错误
+  $existing = gh release list --repo MineLib-Initialization/MineLib-Launcher --limit 50 2>$null |
+    Select-String -SimpleMatch ('v' + $Version)
+  $ErrorActionPreference = $prev
   if (-not $existing) {
     gh release create ('v' + $Version) $zip --repo MineLib-Initialization/MineLib-Launcher --title ('MineLib 启动器 ' + $Version) --notes-file $notesFile --latest 2>&1 | Out-Null
     Write-Host ('    GitHub Release v' + $Version + ' ok')
