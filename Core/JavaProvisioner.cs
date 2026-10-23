@@ -34,7 +34,8 @@ public static class JavaProvisioner
     public static async Task<(string exe, int major)> EnsureAsync(int needMajor,
         IProgress<InstallProgress>? progress, Action<string>? log, CancellationToken ct)
     {
-        var cached = FindProvisioned(needMajor);
+        // FindProvisioned 会递归找 javaw.exe 并逐个启动 -version；不能留在 UI 线程上
+        var cached = await Task.Run(() => FindProvisioned(needMajor), ct).ConfigureAwait(false);
         if (cached is not null)
         {
             log?.Invoke("复用已下载的 Java " + needMajor + "：" + cached);

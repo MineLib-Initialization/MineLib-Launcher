@@ -99,15 +99,11 @@ public static class GameLauncher
         var args = new List<string>();
         if (!string.IsNullOrEmpty(account.Authlib))
         {
-            try
-            {
-                var injector = YggdrasilAuth.EnsureInjectorAsync().GetAwaiter().GetResult();
+            // 只查本地缓存。以前这里是同步等网络（GetAwaiter().GetResult()），
+            // 首次外置登录启动时会把 UI 线程整个卡住；预下载改在 OnLaunchClick 里异步做。
+            var injector = YggdrasilAuth.FindCachedInjector();
+            if (!string.IsNullOrEmpty(injector))
                 args.Add("-javaagent:" + injector + "=" + account.Authlib);
-            }
-            catch (Exception)
-            {
-                // 注入器拿不到就让服务器自己去拒绝，不静默改账号类型
-            }
         }
         args.Add("-Xmx" + memoryMb + "m");
         args.Add("-Xms512m");
