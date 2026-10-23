@@ -10,7 +10,7 @@
     <AssemblyName>MineLibLauncher</AssemblyName>
     <RootNamespace>MineLib</RootNamespace>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <Version>0.5.1</Version>
+    <Version>0.5.2</Version>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
