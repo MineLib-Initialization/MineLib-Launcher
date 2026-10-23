@@ -229,7 +229,7 @@ public static class GameLauncher
 public sealed class GameProcess
 {
     private Process? _proc;
-    private StreamWriter? _log;
+    private GameLogWriter? _log;
 
     public event Action<string>? LineReceived;
     public event Action<int>? Exited;
@@ -238,8 +238,12 @@ public sealed class GameProcess
 
     public void Start(string javaExe, List<string> args, string cwd, string logPath)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-        _log = new StreamWriter(logPath, false, System.Text.Encoding.UTF8) { AutoFlush = true };
+        // 上一轮的进程句柄先放掉，别每次启动留一个
+        try { _proc?.Dispose(); } catch (Exception) { }
+        _proc = null;
+
+        _log?.Dispose();
+        _log = new GameLogWriter(logPath);
 
         var psi = new ProcessStartInfo(javaExe)
         {
@@ -267,7 +271,7 @@ public sealed class GameProcess
                 _proc?.WaitForExit();
             }
             catch (Exception) { }
-            try { _log?.Flush(); _log?.Dispose(); } catch (Exception) { }
+            try { _log?.Dispose(); } catch (Exception) { }
             _log = null;
             Exited?.Invoke(code);
         };

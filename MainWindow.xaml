@@ -517,7 +517,7 @@
                             </Grid.ColumnDefinitions>
                             <Border Width="42" Height="42" CornerRadius="4" Background="{StaticResource Hover}"
                                     ClipToBounds="True" Margin="0,0,12,0" VerticalAlignment="Top">
-                              <Image Source="{Binding IconUrl}" Stretch="UniformToFill" />
+                              <Image Source="{Binding Icon}" Stretch="UniformToFill" />
                             </Border>
                             <StackPanel Grid.Column="1">
                               <TextBlock Text="{Binding Title}" FontWeight="SemiBold"

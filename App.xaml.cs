@@ -118,6 +118,41 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 日志写入器自检：批量刷盘后内容不能丢、行数要对得上
+        if (e.Args.Contains("--selftest-log"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-log-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                Directory.CreateDirectory(work);
+                var path = Path.Combine(work, "game.log");
+                const int lines = 20000;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                using (var w = new GameLogWriter(path))
+                {
+                    for (var i = 0; i < lines; i++)
+                        w.WriteLine("[12:00:00] [main/INFO]: 第 " + i + " 行日志 with some padding text");
+                }
+                sw.Stop();
+                var written = File.ReadAllLines(path).Length;
+                var lastOk = File.ReadAllText(path).Contains("第 " + (lines - 1) + " 行日志");
+                sb.AppendLine("写入 " + lines + " 行，用时 " + sw.ElapsedMilliseconds + "ms，落盘 " + written +
+                              " 行，末行完整=" + lastOk);
+                sb.AppendLine(written == lines && lastOk ? "LOG SELFTEST PASS" : "LOG SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("LOG SELFTEST FAIL " + ex.Message);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-log.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // 客户端管理自检：改名要连带目录/json/jar/其它版本的 inheritsFrom；删除前能查出依赖
         if (e.Args.Contains("--selftest-client"))
         {
