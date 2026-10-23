@@ -165,9 +165,36 @@ public static class Installer
         public bool Client;
         public List<JsonObject> Libraries = new();
         public bool AssetIndex;
-        public bool AssetObjects;
+        public int AssetObjectsMissing;
 
-        public bool Any => Client || Libraries.Count > 0 || AssetIndex;
+        public bool Any => Client || Libraries.Count > 0 || AssetIndex || AssetObjectsMissing > 0;
+    }
+
+    /// <summary>资源对象有没有缺的（索引存在但文件被删/下坏的情况）。</summary>
+    public static int CountMissingAssets(string gameDir, JsonObject merged, int stopAfter = 50)
+    {
+        try
+        {
+            var indexId = merged["assetIndex"]?["id"]?.ToString();
+            if (string.IsNullOrEmpty(indexId)) return 0;
+            var idxPath = Path.Combine(gameDir, "assets", "indexes", indexId + ".json");
+            if (!File.Exists(idxPath)) return 0;   // 索引都没有：交给 AssetIndex 那条分支去下
+            var index = JsonNode.Parse(File.ReadAllText(idxPath));
+            if (index?["objects"] is not JsonObject objects) return 0;
+            var missing = 0;
+            foreach (var kv in objects)
+            {
+                var hash = kv.Value?["hash"]?.ToString();
+                if (string.IsNullOrEmpty(hash) || hash.Length < 2) continue;
+                var dest = Path.Combine(gameDir, "assets", "objects", hash[..2], hash);
+                if (!File.Exists(dest) && ++missing >= stopAfter) break;
+            }
+            return missing;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     public static MissingFiles ScanMissing(string gameDir, string vid, JsonObject merged)
@@ -191,6 +218,7 @@ public static class Installer
         {
             var idx = Path.Combine(gameDir, "assets", "indexes", indexId + ".json");
             if (!File.Exists(idx)) miss.AssetIndex = true;
+            else miss.AssetObjectsMissing = CountMissingAssets(gameDir, merged);
         }
         return miss;
     }
@@ -210,7 +238,8 @@ public static class Installer
             var alt = mirror(rootId);
             if (await Http.DownloadAsync(alt, dest, sha1, progress, ct).ConfigureAwait(false)) return;
         }
-        await Http.DownloadAsync(url, dest, sha1, progress, ct).ConfigureAwait(false);
+        if (!await Http.DownloadAsync(url, dest, sha1, progress, ct).ConfigureAwait(false))
+            throw new InvalidOperationException("客户端 jar 下载失败：" + url);
     }
 
     /// <summary>沿着 inheritsFrom 走到底，拿到原版版本 id。</summary>
@@ -239,7 +268,11 @@ public static class Installer
                 tasks.AddRange(LibArtifacts(lib, gameDir));
             }
         }
-        await Http.DownloadManyAsync(tasks, threads, Wrap(onProgress), ct).ConfigureAwait(false);
+        var (ok, failed) = await Http.DownloadManyAsync(tasks, threads, Wrap(onProgress), ct)
+            .ConfigureAwait(false);
+        if (failed > 0)
+            throw new InvalidOperationException("依赖库有 " + failed + " 个文件下载失败（成功 " + ok +
+                                                " / 共 " + tasks.Count + "），请重试或换下载源");
     }
 
     public static async Task EnsureAssetsAsync(string gameDir, JsonObject merged, int threads,
@@ -266,7 +299,11 @@ public static class Installer
                 Path.Combine(gameDir, "assets", "objects", hash[..2], hash), hash,
                 kv.Value?["size"]?.GetValue<long>() ?? 0));
         }
-        await Http.DownloadManyAsync(tasks, threads, Wrap(onProgress), ct).ConfigureAwait(false);
+        var (ok, failed) = await Http.DownloadManyAsync(tasks, threads, Wrap(onProgress), ct)
+            .ConfigureAwait(false);
+        if (failed > 0)
+            throw new InvalidOperationException("资源文件有 " + failed + " 个下载失败（成功 " + ok +
+                                                " / 共 " + tasks.Count + "），请重试或换下载源");
     }
 
     private static IProgress<Http.BulkProgress>? Wrap(Action<Http.BulkProgress>? onProgress) =>

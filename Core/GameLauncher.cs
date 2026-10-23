@@ -31,17 +31,14 @@ public static class GameLauncher
                     0.1 + 0.4 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct));
         }
         if (fixups.Count > 0) await Task.WhenAll(fixups).ConfigureAwait(false);
-        var indexId = merged["assetIndex"]?["id"]?.ToString();
-        if (!string.IsNullOrEmpty(indexId))
+        // 索引缺失、或者索引在但资源对象被删了/下坏了，都要补
+        if (miss.AssetIndex || miss.AssetObjectsMissing > 0)
         {
-            var idx = Path.Combine(gameDir, "assets", "indexes", indexId + ".json");
-            if (!File.Exists(idx))
-            {
-                progress?.Report(new InstallProgress("下载资源索引…", 0.5));
-                await Installer.EnsureAssetsAsync(gameDir, merged, threads, p => progress?.Report(
-                        new InstallProgress($"资源 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
-                            0.5 + 0.5 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct).ConfigureAwait(false);
-            }
+            progress?.Report(new InstallProgress(
+                miss.AssetIndex ? "下载资源索引…" : ("补齐 " + miss.AssetObjectsMissing + " 个以上资源文件…"), 0.5));
+            await Installer.EnsureAssetsAsync(gameDir, merged, threads, p => progress?.Report(
+                    new InstallProgress($"资源 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
+                        0.5 + 0.5 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct).ConfigureAwait(false);
         }
         return miss;
     }

@@ -47,6 +47,61 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 资源检测自检：索引在但对象被删，必须能被 ScanMissing 发现
+        if (e.Args.Contains("--selftest-assets"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-assets-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                var idxDir = Path.Combine(work, "assets", "indexes");
+                Directory.CreateDirectory(idxDir);
+                var hash = "b62ca8ec10d07e6bf5ac8dae0c8c1d2e6a1e3356";
+                var index = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["objects"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["minecraft/lang/zh_cn.json"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["hash"] = hash,
+                            ["size"] = 9101
+                        }
+                    }
+                };
+                File.WriteAllText(Path.Combine(idxDir, "test.json"), index.ToJsonString());
+                var merged = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["id"] = "test",
+                    ["assetIndex"] = new System.Text.Json.Nodes.JsonObject { ["id"] = "test" }
+                };
+
+                var miss1 = Installer.ScanMissing(work, "test", merged);
+                sb.AppendLine("对象缺失时：AssetIndex=" + miss1.AssetIndex +
+                              " 缺失对象=" + miss1.AssetObjectsMissing + " Any=" + miss1.Any +
+                              "（应为 0 / 1 / True）");
+
+                var objDir = Path.Combine(work, "assets", "objects", hash[..2]);
+                Directory.CreateDirectory(objDir);
+                File.WriteAllText(Path.Combine(objDir, hash), "x");
+                var miss2 = Installer.ScanMissing(work, "test", merged);
+                sb.AppendLine("对象齐全时：缺失对象=" + miss2.AssetObjectsMissing + " AssetAny=" +
+                              (miss2.AssetIndex || miss2.AssetObjectsMissing > 0) + "（应为 0 / False）");
+
+                var ok = miss1.AssetObjectsMissing == 1 && miss1.Any && miss2.AssetObjectsMissing == 0;
+                sb.AppendLine(ok ? "ASSETS SELFTEST PASS" : "ASSETS SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("ASSETS SELFTEST FAIL " + ex);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-assets.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // 下载层自检：重复任务去重、取消后不留 .part、小文件按 sha1 校验
         if (e.Args.Contains("--selftest-http"))
         {
