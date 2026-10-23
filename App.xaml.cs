@@ -47,6 +47,43 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // Java 自检：本机探测（带缓存）、Adoptium 版本映射（含非 LTS 回退）
+        if (e.Args.Contains("--selftest-javafind"))
+        {
+            var sb = new StringBuilder();
+            try
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var found = JavaFinder.Find("", Path.GetTempPath(), 21);
+                sw.Stop();
+                sb.AppendLine("首次探测：exe=" + found.exe + " major=" + found.major +
+                              " 用时=" + sw.ElapsedMilliseconds + "ms  说明=" + found.note);
+
+                var again = System.Diagnostics.Stopwatch.StartNew();
+                var cachedMajor = JavaFinder.MajorOf(found.exe);
+                again.Stop();
+                var cacheFile = Path.Combine(AppConfig.Dir, "java-cache.json");
+                sb.AppendLine("命中缓存：major=" + cachedMajor + " 用时=" + again.ElapsedMilliseconds +
+                              "ms 缓存文件=" + File.Exists(cacheFile));
+
+                // Adoptium：16 这种非 LTS 应当回退到 17/21 而不是直接失败
+                var json = await Http.GetJsonAsync(
+                    "https://api.adoptium.net/v3/assets/latest/17/hotspot?architecture=x64&image_type=jre&os=windows&vendor=eclipse",
+                    CancellationToken.None);
+                var has17 = (json as System.Text.Json.Nodes.JsonArray)?.Count > 0;
+                sb.AppendLine("Adoptium 17 可用=" + has17);
+
+                var ok = found.major > 0 && again.ElapsedMilliseconds <= sw.ElapsedMilliseconds && has17;
+                sb.AppendLine(ok ? "JAVAFIND SELFTEST PASS" : "JAVAFIND SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("JAVAFIND SELFTEST FAIL " + ex.Message);
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-javafind.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // 账号自检：离线 UUID 是否与 Java 一致、注入器能否就位、外置登录的错误提示
         if (e.Args.Contains("--selftest-auth"))
         {

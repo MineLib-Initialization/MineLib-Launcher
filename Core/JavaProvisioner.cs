@@ -42,12 +42,40 @@ public static class JavaProvisioner
             return (cached, needMajor);
         }
 
-        var api = "https://api.adoptium.net/v3/assets/latest/" + needMajor +
-                  "/hotspot?architecture=" + Arch + "&image_type=jre&os=windows&vendor=eclipse";
-        progress?.Report(new InstallProgress("查询 Java " + needMajor + " 下载地址…", 0.01));
-        var node = await Http.GetJsonAsync(api, ct).ConfigureAwait(false);
-        var first = (node as JsonArray)?.OfType<JsonObject>().FirstOrDefault()
-                    ?? throw new InvalidOperationException("Adoptium 没有提供 Java " + needMajor + " 的 Windows 包");
+        // Adoptium 只发 LTS（8/11/17/21/25…）。像 1.17 要求 Java 16 这种非 LTS 版本，
+        // 直接按 16 查会 404，所以按「需要 → 可用的更高 LTS」顺序挨个试。
+        var candidates = new List<int> { needMajor };
+        foreach (var fallback in new[] { 17, 21, 11, 8, 25 })
+            if (fallback > needMajor || fallback == needMajor)
+                candidates.Add(fallback);
+        candidates = candidates.Distinct().ToList();
+
+        JsonObject? first = null;
+        var chosenMajor = needMajor;
+        foreach (var candidate in candidates)
+        {
+            progress?.Report(new InstallProgress("查询 Java " + candidate + " 下载地址…", 0.01));
+            try
+            {
+                var api = "https://api.adoptium.net/v3/assets/latest/" + candidate +
+                          "/hotspot?architecture=" + Arch + "&image_type=jre&os=windows&vendor=eclipse";
+                var node = await Http.GetJsonAsync(api, ct).ConfigureAwait(false);
+                var hit = (node as JsonArray)?.OfType<JsonObject>().FirstOrDefault();
+                if (hit is null) continue;
+                first = hit;
+                chosenMajor = candidate;
+                if (candidate != needMajor)
+                    log?.Invoke("Adoptium 没有 Java " + needMajor + "，改用 Java " + candidate + "（向下兼容）");
+                break;
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke("查询 Java " + candidate + " 失败：" + Http.Trim(ex.Message));
+            }
+        }
+        if (first is null)
+            throw new InvalidOperationException("Adoptium 没有可用的 Windows JRE（试过 " +
+                                                string.Join(" / ", candidates) + "）");
 
         var package = first["binary"]?["package"]
                       ?? throw new InvalidOperationException("Adoptium 返回的数据缺少 package 字段");
@@ -56,7 +84,7 @@ public static class JavaProvisioner
         var fileName = package["name"]?.ToString() ?? ("jre" + needMajor + ".zip");
         var sha256 = package["checksum"]?.ToString();
         var size = package["size"]?.GetValue<long>() ?? 0;
-        var release = first["release_name"]?.ToString() ?? ("java" + needMajor);
+        var release = first["release_name"]?.ToString() ?? ("java" + chosenMajor);
 
         var target = Path.Combine(Root, release);
         var zipPath = Path.Combine(Path.GetTempPath(), "minelib-" + fileName);
@@ -68,7 +96,7 @@ public static class JavaProvisioner
             {
                 var frac = p.total > 0 ? (double)p.done / p.total : 0;
                 progress.Report(new InstallProgress(
-                    "下载 Java " + needMajor + " … " + (p.done / 1048576.0).ToString("0.0") + " / " +
+                    "下载 Java " + chosenMajor + " … " + (p.done / 1048576.0).ToString("0.0") + " / " +
                     (p.total / 1048576.0).ToString("0.0") + " MB", 0.02 + frac * 0.86));
             });
 
@@ -84,17 +112,31 @@ public static class JavaProvisioner
                 throw new InvalidOperationException("Java 包校验失败（sha256 不匹配），已中止");
         }
 
-        progress?.Report(new InstallProgress("解压 Java " + needMajor + "…", 0.9));
-        if (Directory.Exists(target)) Directory.Delete(target, true);
+        progress?.Report(new InstallProgress("解压 Java " + chosenMajor + "…", 0.9));
+        if (Directory.Exists(target))
+        {
+            try { Directory.Delete(target, true); }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("旧的 Java 目录删不掉（可能被占用）：" + target + "，" + ex.Message);
+            }
+        }
         Directory.CreateDirectory(target);
-        ZipFile.ExtractToDirectory(zipPath, target, true);
-        try { File.Delete(zipPath); } catch (Exception) { }
+        try
+        {
+            ZipFile.ExtractToDirectory(zipPath, target, true);
+        }
+        finally
+        {
+            try { File.Delete(zipPath); } catch (Exception) { }
+        }
 
         var exe = Directory.GetFiles(target, "javaw.exe", SearchOption.AllDirectories).FirstOrDefault();
         if (exe is null) throw new InvalidOperationException("解压后没有找到 javaw.exe，包结构可能变了");
         var major = JavaFinder.MajorOf(exe);
-        if (major != needMajor)
-            throw new InvalidOperationException("下载的 Java 版本是 " + major + "，与需要的 " + needMajor + " 不符");
+        // 允许「比需要的更新」（比如要 16 给了 17），但不允许更低
+        if (major < needMajor)
+            throw new InvalidOperationException("下载的 Java 版本是 " + major + "，低于需要的 " + needMajor);
 
         progress?.Report(new InstallProgress("Java " + major + " 就绪", 1.0));
         log?.Invoke("Java " + major + " 已就绪：" + exe);

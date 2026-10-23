@@ -85,7 +85,18 @@ public static class JavaFinder
         return list.Distinct(StringComparer.OrdinalIgnoreCase).Where(File.Exists).ToList();
     }
 
+    /// <summary>探测 Java 主版本。-version 的输出可能一直不结束（坏 JDK），这里给硬超时并杀进程。</summary>
     public static int MajorOf(string exe)
+    {
+        var cached = ReadCache(exe);
+        if (cached >= 0) return cached;
+
+        var major = ProbeMajor(exe);
+        WriteCache(exe, major);
+        return major;
+    }
+
+    private static int ProbeMajor(string exe)
     {
         try
         {
@@ -98,8 +109,17 @@ public static class JavaFinder
             };
             using var p = Process.Start(psi);
             if (p is null) return 0;
-            var text = p.StandardError.ReadToEnd() + p.StandardOutput.ReadToEnd();
-            p.WaitForExit(8000);
+            // 两个流同时读，避免其中一个写满缓冲区把进程卡住
+            var errTask = p.StandardError.ReadToEndAsync();
+            var outTask = p.StandardOutput.ReadToEndAsync();
+            var all = Task.WhenAll(errTask, outTask);
+            if (!all.Wait(TimeSpan.FromSeconds(4)))
+            {
+                try { p.Kill(true); } catch (Exception) { }
+                return 0;
+            }
+            try { p.WaitForExit(1500); } catch (Exception) { }
+            var text = errTask.Result + outTask.Result;
             var m = Regex.Match(text, "version \"(\\d+)(?:\\.(\\d+))?");
             if (!m.Success) return 0;
             var major = int.Parse(m.Groups[1].Value);
@@ -109,5 +129,77 @@ public static class JavaFinder
         {
             return 0;
         }
+    }
+
+    // ---------------------------------------------------------------- 主版本探测缓存
+    // 每启动一次都要探一遍所有候选 JDK 太慢（每个都 spawn 一次 java）；按「路径 + 修改时间」缓存。
+    private static readonly Dictionary<string, (long ticks, int major)> MemCache =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object CacheLock = new();
+    private static bool _diskLoaded;
+
+    private static string CachePath => Path.Combine(AppConfig.Dir, "java-cache.json");
+
+    private static void LoadDiskCacheOnce()
+    {
+        lock (CacheLock)
+        {
+            if (_diskLoaded) return;
+            _diskLoaded = true;
+            try
+            {
+                if (!File.Exists(CachePath)) return;
+                var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(CachePath))
+                    as System.Text.Json.Nodes.JsonObject;
+                if (node is null) return;
+                foreach (var kv in node)
+                {
+                    var ticks = kv.Value?["t"]?.GetValue<long>() ?? 0;
+                    var major = kv.Value?["m"]?.GetValue<int>() ?? 0;
+                    MemCache[kv.Key] = (ticks, major);
+                }
+            }
+            catch (Exception) { }
+        }
+    }
+
+    private static int ReadCache(string exe)
+    {
+        LoadDiskCacheOnce();
+        try
+        {
+            var info = new FileInfo(exe);
+            if (!info.Exists) return -1;
+            lock (CacheLock)
+            {
+                if (MemCache.TryGetValue(exe, out var hit) && hit.ticks == info.LastWriteTimeUtc.Ticks)
+                    return hit.major;
+            }
+        }
+        catch (Exception) { }
+        return -1;
+    }
+
+    private static void WriteCache(string exe, int major)
+    {
+        try
+        {
+            var info = new FileInfo(exe);
+            if (!info.Exists) return;
+            lock (CacheLock)
+            {
+                MemCache[exe] = (info.LastWriteTimeUtc.Ticks, major);
+                var node = new System.Text.Json.Nodes.JsonObject();
+                foreach (var kv in MemCache)
+                    node[kv.Key] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["t"] = kv.Value.ticks,
+                        ["m"] = kv.Value.major
+                    };
+                Directory.CreateDirectory(AppConfig.Dir);
+                File.WriteAllText(CachePath, node.ToJsonString());
+            }
+        }
+        catch (Exception) { }
     }
 }
