@@ -7,6 +7,48 @@ namespace MineLib;
 
 public partial class App : Application
 {
+    public App()
+    {
+        InstallGlobalHandlers();
+    }
+
+    /// <summary>全局兜底：以前一个没 catch 的 async void 就能让整个启动器无声退出。</summary>
+    private void InstallGlobalHandlers()
+    {
+        DispatcherUnhandledException += (_, ev) =>
+        {
+            var path = CrashReporter.Report(ev.Exception, "界面线程");
+            // 自检模式不弹窗：无人值守，弹了会卡住整个进程
+            if (Environment.GetCommandLineArgs()
+                .Any(a => a.StartsWith("--selftest", StringComparison.OrdinalIgnoreCase)))
+            {
+                ev.Handled = true;
+                return;
+            }
+            try
+            {
+                MessageBox.Show(
+                    "启动器遇到了一个错误，已经记到日志里：" + Environment.NewLine + Environment.NewLine +
+                    (string.IsNullOrEmpty(path) ? ev.Exception.Message : path) + Environment.NewLine + Environment.NewLine +
+                    "界面还能继续用，但如果反复出现，请把这个文件发给我。",
+                    "MineLib 出错了", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            catch (Exception) { }
+            ev.Handled = true;   // 界面不因此退出
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, ev) =>
+        {
+            if (ev.ExceptionObject is Exception ex) CrashReporter.Report(ex, "非界面线程");
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, ev) =>
+        {
+            CrashReporter.Report(ev.Exception, "后台任务");
+            ev.SetObserved();
+        };
+    }
+
     /// <summary>--selftest：不开界面，跑一遍加载器与模组接口，结果写到临时文件（便于离线核对）。</summary>
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -14,6 +56,35 @@ public partial class App : Application
         if (e.Args.Any(a => a.StartsWith("--selftest", StringComparison.OrdinalIgnoreCase)))
             AppConfig.SuppressSave = true;
 
+        // 自检：故意抛异常，验证全局兜底会把崩溃写进日志
+        if (e.Args.Contains("--selftest-crash"))
+        {
+            var sb = new StringBuilder();
+            var dir = CrashReporter.LogDir;
+            var before = Directory.Exists(dir)
+                ? Directory.GetFiles(dir, "crash-*.log").Length
+                : 0;
+            // 用 BeginInvoke（fire-and-forget）才会走 DispatcherUnhandledException；
+            // 用 InvokeAsync 的话异常会回到调用方，测不到兜底
+            Dispatcher.BeginInvoke(new Action(() => throw new InvalidOperationException("自检故意抛出的异常")));
+            await Task.Delay(800);
+            var after = Directory.Exists(dir) ? Directory.GetFiles(dir, "crash-*.log").Length : 0;
+            sb.AppendLine("崩溃日志目录 = " + dir);
+            sb.AppendLine("抛异常前 " + before + " 个，之后 " + after + " 个");
+            var newest = Directory.Exists(dir)
+                ? Directory.GetFiles(dir, "crash-*.log").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
+                : null;
+            var body = newest is null ? "" : File.ReadAllText(newest);
+            var hasText = body.Contains("自检故意抛出的异常");
+            sb.AppendLine("最新日志含异常信息 = " + hasText + "（" + (newest ?? "无") + "）");
+            sb.AppendLine(after > before && hasText ? "CRASH SELFTEST PASS" : "CRASH SELFTEST FAIL");
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-crash.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
+
+        try
+        {
         // 发布用：--mkpatch <旧exe> <新exe> <输出补丁> 生成增量补丁，不显示界面
         // 注意：StartupEventArgs.Args 不含 exe 路径，--mkpatch 的下标是 0
         var patchIdx = Array.IndexOf(e.Args, "--mkpatch");
@@ -1154,5 +1225,22 @@ public partial class App : Application
             return;
         }
         base.OnStartup(e);
+        }
+        catch (Exception ex)
+        {
+            // 启动阶段崩了也要留下证据，而不是静默退出
+            CrashReporter.Report(ex, "启动");
+            if (!Environment.GetCommandLineArgs()
+                .Any(a => a.StartsWith("--selftest", StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    MessageBox.Show("启动器启动失败：" + Environment.NewLine + Environment.NewLine + ex.Message,
+                        "MineLib 启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                catch (Exception) { }
+            }
+            Shutdown(1);
+        }
     }
 }
