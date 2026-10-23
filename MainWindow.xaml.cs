@@ -1136,17 +1136,21 @@ public partial class MainWindow : Window
     // ---------------------------------------------------------------- 客户端文件夹（根目录）
     private void EnsureDefaultRoot()
     {
-        // 便携模式：默认就在启动器目录下的 .minecraft，不存在就建出来
-        if (_cfg.Roots.Count == 0)
+        // 便携模式：默认根目录永远是「启动器目录下的 .minecraft」，先建出来并登记，
+        // 但不强行把当前选中的根切过去（老用户的数据还在别处）
+        try { Directory.CreateDirectory(Paths.DefaultGameRoot); } catch (Exception) { }
+        var hasDefault = _cfg.Roots.Any(r =>
+            string.Equals(r.Path, Paths.DefaultGameRoot, StringComparison.OrdinalIgnoreCase));
+        if (!hasDefault)
         {
-            try { Directory.CreateDirectory(Paths.DefaultGameRoot); } catch (Exception) { }
+            var keep = _cfg.GameDir;
             _cfg.RegisterRoot(Paths.DefaultGameRoot);
+            _cfg.GameDir = keep;      // RegisterRoot 会改当前根，这里改回来
+            _cfg.Save();
         }
-        else
-        {
-            try { Directory.CreateDirectory(_cfg.GameDir); } catch (Exception) { }
-            _cfg.RegisterRoot(_cfg.GameDir);
-        }
+
+        try { Directory.CreateDirectory(_cfg.GameDir); } catch (Exception) { }
+        _cfg.RegisterRoot(_cfg.GameDir);
     }
 
     private void RefreshRootCombo()

@@ -70,7 +70,8 @@ public sealed class AppConfig
     public string LastAccountKey { get; set; } = "";
     /// <summary>旧版字段：单根目录时代的客户端列表；载入时会迁到 Roots 里。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("Clients")]
-    public List<ClientEntry> LegacyClients { get; set; } = new();
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<ClientEntry>? LegacyClients { get; set; }
 
     /// <summary>当前客户端文件夹里的客户端。代码里沿用 Clients 这个名字。</summary>
     [System.Text.Json.Serialization.JsonIgnore]
@@ -179,7 +180,7 @@ public sealed class AppConfig
                         foreach (var c in cfg.LegacyClients)
                             if (rootEntry.Clients.All(x => !string.Equals(x.VersionId, c.VersionId, StringComparison.OrdinalIgnoreCase)))
                                 rootEntry.Clients.Add(c);
-                        cfg.LegacyClients.Clear();
+                        cfg.LegacyClients = null;
                     }
                     return cfg;
                 }
