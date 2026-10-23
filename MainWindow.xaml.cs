@@ -149,11 +149,15 @@ public partial class MainWindow : Window
                 ApplyTabIndex(tabIdx);
                 if (tabIdx == 4)
                 {
-                    await Task.Delay(600);
-                    if (shotArgs.Length > shotIdx + 4 && shotArgs[shotIdx + 4] == "any") ModMcBox.Text = "";
+                    // 等切到模组页的自动检索跑完，否则它的结果会盖掉我们这次的
+                    await Task.Delay(1200);
+                    var anyVer = shotArgs.Length > shotIdx + 4 && shotArgs[shotIdx + 4] == "any";
+                    if (anyVer) ModMcBox.Text = "";
                     ModSearchBox.Text = query;
+                    await Task.Delay(200);
+                    if (anyVer) ModMcBox.Text = "";   // 防止被 InitModTab 回填成当前版本
                     await RunModSearchAsync(0);
-                    await Task.Delay(1500);
+                    await Task.Delay(2500);
                 }
                 else if (tabIdx == 3)
                 {
@@ -185,10 +189,8 @@ public partial class MainWindow : Window
                 foreach (var p in new FrameworkElement[] { PaneClient, PaneDownload, PaneAccount, PaneSettings })
                     p.Visibility = Visibility.Visible;
                 UpdateLayout();
-                PaneDownload.Visibility = Visibility.Collapsed;
-                PaneAccount.Visibility = Visibility.Collapsed;
-                PaneSettings.Visibility = Visibility.Collapsed;
-                PaneClient.Visibility = Visibility.Visible;
+                // 恢复成当前选中的页签（--shot 可能已经切到别的页了）
+                ShowPane(_pane);
             }
             catch (Exception) { }
 

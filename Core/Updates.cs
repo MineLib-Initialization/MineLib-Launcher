@@ -77,7 +77,16 @@ public static class Updates
 
         // 先试增量：本地 exe + 小补丁，通常只有几 MB，比整包快一个数量级
         var localExe = Path.Combine(AppContext.BaseDirectory, "MineLibLauncher.exe");
-        if (!string.IsNullOrEmpty(info.PatchUrl) && info.PatchFrom == Current && File.Exists(localExe))
+        // 只有「起点版本与当前版本完全一致」才用增量；跨版本（比如 0.5.0 直接升 0.5.4）
+        // 一律走全量包，补丁里的基线大小/哈希也对不上，强行套会重建出坏文件。
+        var patchUsable = !string.IsNullOrEmpty(info.PatchUrl)
+                          && string.Equals(info.PatchFrom, Current, StringComparison.Ordinal)
+                          && File.Exists(localExe)
+                          // 补丁比整包还大就别折腾，直接下整包
+                          && (info.Size <= 0 || info.PatchSize <= info.Size / 2);
+        if (!patchUsable && !string.IsNullOrEmpty(info.PatchFrom) && info.PatchFrom != Current)
+            log?.Invoke("当前版本 " + Current + " 与补丁基线 " + info.PatchFrom + " 不同，改下全量包");
+        if (patchUsable)
         {
             try
             {
