@@ -22,7 +22,9 @@ public partial class MainWindow : Window
     private int _javaMajor;
     private string _javaNote = "未检测";
     private GameProcess? _proc;
-    private CancellationTokenSource? _cts;
+    private CancellationTokenSource? _launchCts;
+    private CancellationTokenSource? _createCts;
+    private bool _launching;
     private string _logPath = "";
     private bool _loadingLoaderCombos;
     private List<LoaderVersion> _loaderVersions = new();
@@ -225,7 +227,7 @@ public partial class MainWindow : Window
             // 关闭路径上不做任何可能阻塞的事：不写盘、不等进程、不动网络。
             // 配置几乎每次改动都已保存过；剩下的清理丢到后台，窗口立刻消失。
             try { _logTimer.Stop(); } catch (Exception) { }
-            try { _cts?.Cancel(); } catch (Exception) { }
+            try { _createCts?.Cancel(); } catch (Exception) { }
             try { _updateCts.Cancel(); } catch (Exception) { }
             try { Visibility = Visibility.Hidden; } catch (Exception) { }
             var max = _cfg.MemoryMb;
@@ -393,7 +395,8 @@ public partial class MainWindow : Window
         var needMajor = _merged?["javaVersion"]?["majorVersion"]?.GetValue<int>() ?? 21;
         BtnFetchJava.IsEnabled = false;
         Bar.Visibility = Visibility.Visible;
-        _cts = new CancellationTokenSource();
+        _createCts?.Dispose();
+        _createCts = new CancellationTokenSource();
         var jp = new Progress<InstallProgress>(p =>
         {
             SetStatus(p.Stage, true);
@@ -402,7 +405,7 @@ public partial class MainWindow : Window
         try
         {
             var got = await JavaProvisioner.EnsureAsync(needMajor, jp,
-                AppendLog, _cts.Token);
+                AppendLog, _createCts!.Token);
             _javaExe = got.exe;
             _javaMajor = got.major;
             ValJava.Text = got.exe + "  ·  Java " + got.major + "（MineLib 自带）";
@@ -699,11 +702,22 @@ public partial class MainWindow : Window
     private async void OnLaunchClick(object sender, RoutedEventArgs e)
     {
         if (_proc is { Running: true }) return;
+        // 连点两次会在 _proc 还没建起来时同时进去，这里先挡住
+        if (_launching)
+        {
+            SetStatus("正在准备启动，请稍候…", false);
+            return;
+        }
         if (_current is null || _merged is null)
         {
             SetStatus("先选一个版本。", false);
             return;
         }
+
+        // 把当下的版本/合并 json 固定下来：启动过程有好几处 await，
+        // 期间用户切版本会让后面的步骤用错版本
+        var version = _current;
+        var merged = _merged;
 
         var account = _cfg.CurrentAccount;
         if (account is null)
@@ -713,14 +727,17 @@ public partial class MainWindow : Window
             return;
         }
 
+        _launching = true;
         SaveSettings();
         BtnLaunch.IsEnabled = false;
         SetStatus("准备启动…", true);
-        _cts = new CancellationTokenSource();
+        _launchCts?.Dispose();
+        _launchCts = new CancellationTokenSource();
+        var ct = _launchCts.Token;
 
         try
         {
-            var needMajor = _merged["javaVersion"]?["majorVersion"]?.GetValue<int>() ?? 21;
+            var needMajor = merged["javaVersion"]?["majorVersion"]?.GetValue<int>() ?? 21;
             if (string.IsNullOrEmpty(_javaExe) || _javaMajor != needMajor)
             {
                 if (string.IsNullOrEmpty(_javaExe)) await DetectJavaAsync();
@@ -732,8 +749,7 @@ public partial class MainWindow : Window
                         Bar.Visibility = Visibility.Visible;
                         Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
                     });
-                    var got = await JavaProvisioner.EnsureAsync(needMajor, jp,
-                        AppendLog, _cts.Token);
+                    var got = await JavaProvisioner.EnsureAsync(needMajor, jp, AppendLog, ct);
                     _javaExe = got.exe;
                     _javaMajor = got.major;
                     ValJava.Text = got.exe + "  ·  Java " + got.major + "（MineLib 自带）";
@@ -741,7 +757,7 @@ public partial class MainWindow : Window
                 }
             }
 
-            account = await MicrosoftAuth.EnsureFreshAsync(account, _cts.Token);
+            account = await MicrosoftAuth.EnsureFreshAsync(account, ct);
             if (account.Type == "microsoft") _cfg.UseAccount(account);
             RefreshAccounts();
 
@@ -750,20 +766,20 @@ public partial class MainWindow : Window
                 LblStatus.Text = p.Stage;
                 Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
             });
-            await GameLauncher.PrepareAsync(_cfg.GameDir, _current.Id, _merged, _cfg.DownloadThreads,
-                progress, _cts.Token);
+            await GameLauncher.PrepareAsync(_cfg.GameDir, version.Id, merged, _cfg.DownloadThreads,
+                progress, ct);
             Bar.Value = 0;
 
             if (!string.IsNullOrEmpty(account.Authlib))
             {
                 SetStatus("准备 authlib-injector…", true);
-                try { await YggdrasilAuth.EnsureInjectorAsync(_cts.Token); }
+                try { await YggdrasilAuth.EnsureInjectorAsync(ct); }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { AppendLog("authlib-injector 准备失败：" + ex.Message); }
             }
 
-            var runDir = _cfg.Isolation ? _current.Dir : _cfg.GameDir;
-            var (args, _) = GameLauncher.BuildCommand(_cfg.GameDir, _current.Id, _merged, account,
+            var runDir = _cfg.Isolation ? version.Dir : _cfg.GameDir;
+            var (args, _) = GameLauncher.BuildCommand(_cfg.GameDir, version.Id, merged, account,
                 _javaExe, _cfg.MemoryMb, _cfg.JvmArgs, runDir);
 
             _logPath = Path.Combine(_cfg.GameDir, "logs",
@@ -800,6 +816,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            _launching = false;
             BtnLaunch.IsEnabled = true;
             Bar.Visibility = Visibility.Collapsed;
             Bar.Value = 0;
@@ -809,7 +826,7 @@ public partial class MainWindow : Window
     private void OnStopClick(object sender, RoutedEventArgs e)
     {
         _proc?.Stop();
-        _cts?.Cancel();
+        _launchCts?.Cancel();
         SetStatus("正在结束游戏进程…", false);
     }
 
@@ -1634,7 +1651,8 @@ public partial class MainWindow : Window
         BtnCreateCancel.Visibility = Visibility.Visible;
         CreateBar.Visibility = Visibility.Visible;
         CreateBar.Value = 0;
-        _cts = new CancellationTokenSource();
+        _createCts?.Dispose();
+        _createCts = new CancellationTokenSource();
         var progress = new Progress<InstallProgress>(p =>
         {
             LblCreateStatus.Text = p.Stage;
@@ -1645,7 +1663,7 @@ public partial class MainWindow : Window
         {
             var result = await ClientCreator.CreateAsync(_cfg, NewNameBox.Text, v.Id,
                 loaderLabel, _cfg.DownloadThreads, javaExe, progress,
-                AppendLog, _cts.Token);
+                AppendLog, _createCts!.Token);
 
             ValGameDir.Text = _cfg.GameDir;
             await RefreshVersionsAsync();
@@ -1699,7 +1717,7 @@ public partial class MainWindow : Window
 
     private void OnCancelClick(object sender, RoutedEventArgs e)
     {
-        _cts?.Cancel();
+        _createCts?.Cancel();
         _proc?.Stop();
     }
 
