@@ -47,6 +47,53 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 加载器自检：Fabric 真装一次 + 安装器结果识别逻辑
+        if (e.Args.Contains("--selftest-loader"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-loader-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(work, "versions", "1.20.1"));
+
+                // 1) 结果识别：只认新出现且带关键字的目录
+                var before = Loaders.SnapshotVersions(work);
+                Directory.CreateDirectory(Path.Combine(work, "versions", "1.19.2"));
+                Directory.CreateDirectory(Path.Combine(work, "versions", "1.20.1-forge-47.2.0"));
+                var found = Loaders.FindNewVersion(work, before, new[] { "forge", "47.2.0" });
+                var wrong = Loaders.FindNewVersion(work, before, new[] { "neoforge" });
+                sb.AppendLine("识别安装结果 = " + (found ?? "null") + "（应为 1.20.1-forge-47.2.0）不匹配项=" + (wrong ?? "null"));
+
+                // 2) Fabric 真装一次（纯文本 profile，不依赖 Java）
+                var versions = await Loaders.VersionsAsync(LoaderKind.Fabric, "1.20.1", CancellationToken.None);
+                var pick = versions.FirstOrDefault(v => v.Channel == "稳定") ?? versions.FirstOrDefault();
+                var madeId = await Loaders.InstallAsync(LoaderKind.Fabric, "1.20.1", pick!.Version, work, "",
+                    null, line => sb.AppendLine("  " + line), CancellationToken.None);
+                var jsonPath = Path.Combine(work, "versions", madeId, madeId + ".json");
+                var jsonOk = File.Exists(jsonPath);
+                var inheritOk = false;
+                if (jsonOk)
+                {
+                    var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(jsonPath));
+                    inheritOk = node?["inheritsFrom"]?.ToString() == "1.20.1";
+                }
+                sb.AppendLine("Fabric 安装 = " + madeId + "  json=" + jsonOk + " inheritsFrom(1.20.1)=" + inheritOk);
+
+                var ok = found == "1.20.1-forge-47.2.0" && wrong is null && jsonOk && inheritOk;
+                sb.AppendLine(ok ? "LOADER SELFTEST PASS" : "LOADER SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("LOADER SELFTEST FAIL " + ex.Message);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-loader.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // 资源检测自检：索引在但对象被删，必须能被 ScanMissing 发现
         if (e.Args.Contains("--selftest-assets"))
         {

@@ -200,6 +200,7 @@ public static class Loaders
     private static async Task<string> InstallForgeAsync(string mc, string forgeVersion, string gameDir,
         string javaExe, IProgress<InstallProgress>? progress, Action<string>? log, CancellationToken ct)
     {
+        var before = SnapshotVersions(gameDir);
         var full = mc + "-" + forgeVersion;
         var url = $"https://maven.minecraftforge.net/net/minecraftforge/forge/{full}/forge-{full}-installer.jar";
         var jar = Path.Combine(AppConfig.Dir, "installers", $"forge-{full}-installer.jar");
@@ -209,12 +210,28 @@ public static class Loaders
 
         await RunInstallerAsync(javaExe, jar, new[] { "--installClient", gameDir }, gameDir,
             progress, log, ct).ConfigureAwait(false);
-        return mc + "-forge-" + forgeVersion;
+
+        // 安装器实际生成的目录名才是准的（版本号/命名规则可能变），别硬猜
+        var guess = mc + "-forge-" + forgeVersion;
+        var found = FindNewVersion(gameDir, before, new[] { "forge", forgeVersion });
+        if (found is not null)
+        {
+            log?.Invoke("安装器生成版本：" + found);
+            return found;
+        }
+        if (Directory.Exists(Path.Combine(gameDir, "versions", guess)))
+        {
+            log?.Invoke("按约定版本名找到：" + guess);
+            return guess;
+        }
+        throw new InvalidOperationException(
+            "安装器跑完了但没找到它生成的版本目录（期望 " + guess + "），请检查日志。");
     }
 
     private static async Task<string> InstallNeoForgeAsync(string neoforgeVersion, string gameDir,
         string javaExe, IProgress<InstallProgress>? progress, Action<string>? log, CancellationToken ct)
     {
+        var before = SnapshotVersions(gameDir);
         var url = "https://maven.neoforged.net/releases/net/neoforged/neoforge/" + neoforgeVersion +
                   "/neoforge-" + neoforgeVersion + "-installer.jar";
         var jar = Path.Combine(AppConfig.Dir, "installers", $"neoforge-{neoforgeVersion}-installer.jar");
@@ -224,7 +241,21 @@ public static class Loaders
 
         await RunInstallerAsync(javaExe, jar, new[] { "--installClient", gameDir }, gameDir,
             progress, log, ct).ConfigureAwait(false);
-        return "neoforge-" + neoforgeVersion;
+
+        var guess = "neoforge-" + neoforgeVersion;
+        var found = FindNewVersion(gameDir, before, new[] { "neoforge", neoforgeVersion });
+        if (found is not null)
+        {
+            log?.Invoke("安装器生成版本：" + found);
+            return found;
+        }
+        if (Directory.Exists(Path.Combine(gameDir, "versions", guess)))
+        {
+            log?.Invoke("按约定版本名找到：" + guess);
+            return guess;
+        }
+        throw new InvalidOperationException(
+            "安装器跑完了但没找到它生成的版本目录（期望 " + guess + "），请检查日志。");
     }
 
     private static async Task<string> RunLiteLoaderInstallerAsync(string mc, string gameDir, string javaExe,
@@ -246,6 +277,45 @@ public static class Loaders
             CreateNoWindow = false
         });
         return "";
+    }
+
+    /// <summary>记录 versions/ 下已有哪些目录，用来判断安装器新造了什么。</summary>
+    internal static HashSet<string> SnapshotVersions(string gameDir)
+    {
+        try
+        {
+            var dir = Path.Combine(gameDir, "versions");
+            if (!Directory.Exists(dir)) return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return Directory.GetDirectories(dir).Select(Path.GetFileName)
+                .Where(n => !string.IsNullOrEmpty(n)).Select(n => n!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>安装器跑完后，找它新生成的那个版本目录（按关键字过滤）。</summary>
+    internal static string? FindNewVersion(string gameDir, HashSet<string> before, string[] keywords)
+    {
+        try
+        {
+            var dir = Path.Combine(gameDir, "versions");
+            if (!Directory.Exists(dir)) return null;
+            var candidates = Directory.GetDirectories(dir)
+                .Select(Path.GetFileName)
+                .Where(n => !string.IsNullOrEmpty(n) && !before.Contains(n!))
+                .Select(n => n!)
+                .Where(n => keywords.All(k => n.Contains(k, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(n => Directory.GetLastWriteTime(Path.Combine(dir, n)))
+                .ToList();
+            return candidates.FirstOrDefault();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     private static async Task RunInstallerAsync(string javaExe, string jar, string[] args, string gameDir,
@@ -281,12 +351,19 @@ public static class Loaders
         proc.BeginErrorReadLine();
 
         var spin = 0.08;
+        var started = DateTime.UtcNow;
         while (!proc.HasExited)
         {
             if (ct.IsCancellationRequested)
             {
                 try { proc.Kill(true); } catch (Exception) { }
                 ct.ThrowIfCancellationRequested();
+            }
+            // 安装器卡死时别让用户干等：30 分钟还没退就杀掉并说明
+            if ((DateTime.UtcNow - started).TotalMinutes > 30)
+            {
+                try { proc.Kill(true); } catch (Exception) { }
+                throw new InvalidOperationException("安装器运行超过 30 分钟仍未结束，已中止。请检查网络或改用官方安装器。");
             }
             await Task.Delay(500, ct).ConfigureAwait(false);
             spin = Math.Min(0.95, spin + 0.004);

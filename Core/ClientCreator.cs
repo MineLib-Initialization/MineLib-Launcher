@@ -72,6 +72,15 @@ public static class ClientCreator
         }
 
         progress?.Report(new InstallProgress("完成", 1.0));
+
+        // LiteLoader 这类只有图形安装器的：拿不到版本 id 就别登记一个空客户端
+        if (string.IsNullOrEmpty(versionId))
+        {
+            log?.Invoke("安装器已在窗口里启动，完成后点「刷新」即可看到新版本。");
+            return new Result(safeName, "", mcver, loaderLabelText,
+                "安装器已启动，完成后再刷新");
+        }
+
         var client = cfg.RegisterClient(versionId, safeName, mcver, loaderLabelText);
         var note = mcver + (kind is null ? "" : " · " + loaderLabelText);
         return new Result(client.Name, versionId, mcver, loaderLabelText, note);
