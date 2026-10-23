@@ -1228,10 +1228,17 @@ public partial class MainWindow : Window
         }
 
         var vdir = _current.Dir;
+        var dependents = ClientCreator.Dependents(_cfg.GameDir, _current.Id);
+        var dependNote = dependents.Count == 0
+            ? ""
+            : Environment.NewLine + Environment.NewLine +
+              "⚠ 还有 " + dependents.Count + " 个客户端继承它：" + string.Join("、", dependents.Take(5)) +
+              (dependents.Count > 5 ? " 等" : "") + Environment.NewLine +
+              "删掉这个版本后，它们会因为缺少父版本而无法启动。";
         var first = MessageBox.Show(
             "从列表里移除客户端「" + name + "」？" + Environment.NewLine + Environment.NewLine +
             "版本：" + _current.Id + Environment.NewLine + "目录：" + vdir + Environment.NewLine + Environment.NewLine +
-            "点「是」先移除，之后会再问要不要删磁盘文件。libraries 与 assets 是共用的，不会被删。",
+            "点「是」先移除，之后会再问要不要删磁盘文件。libraries 与 assets 是共用的，不会被删。" + dependNote,
             "删除客户端", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (first != MessageBoxResult.Yes) return;
 

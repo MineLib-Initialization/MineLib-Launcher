@@ -47,6 +47,72 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 客户端管理自检：改名要连带目录/json/jar/其它版本的 inheritsFrom；删除前能查出依赖
+        if (e.Args.Contains("--selftest-client"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-cli-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                var versions = Path.Combine(work, "versions");
+                void MakeVersion(string id, string? inherits = null, bool withJar = false)
+                {
+                    var dir = Path.Combine(versions, id);
+                    Directory.CreateDirectory(dir);
+                    var node = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["id"] = id,
+                        ["type"] = "release",
+                        ["mainClass"] = "net.minecraft.client.main.Main"
+                    };
+                    if (inherits is not null) node["inheritsFrom"] = inherits;
+                    File.WriteAllText(Path.Combine(dir, id + ".json"), node.ToJsonString());
+                    if (withJar) File.WriteAllText(Path.Combine(dir, id + ".jar"), "jar");
+                }
+
+                MakeVersion("1.20.1", null, true);
+                MakeVersion("fabric-loader-0.15-1.20.1", "1.20.1", true);
+                MakeVersion("子客户端", "fabric-loader-0.15-1.20.1");
+
+                var renamed = ClientCreator.RenameVersionDir(work, "fabric-loader-0.15-1.20.1", "我的客户端",
+                    null, null, line => sb.AppendLine("  " + line));
+                var newDir = Path.Combine(versions, "我的客户端");
+                var jsonOk = File.Exists(Path.Combine(newDir, "我的客户端.json"));
+                var idOk = false;
+                if (jsonOk)
+                {
+                    var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(newDir, "我的客户端.json")));
+                    idOk = node?["id"]?.ToString() == "我的客户端";
+                }
+                var jarOk = File.Exists(Path.Combine(newDir, "我的客户端.jar"));
+                var childJson = Path.Combine(versions, "子客户端", "子客户端.json");
+                var childInherits = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(childJson))?["inheritsFrom"]?.ToString();
+                sb.AppendLine("改名=" + renamed + " 目录=" + Directory.Exists(newDir) + " json=" + jsonOk +
+                              " id=" + idOk + " jar=" + jarOk + " 子版本 inheritsFrom=" + childInherits);
+
+                // 目标已存在时必须拒绝，且不改动任何东西
+                var reject = ClientCreator.RenameVersionDir(work, "我的客户端", "1.20.1");
+                sb.AppendLine("重名目标拒绝 = " + (reject is null));
+
+                var deps = ClientCreator.Dependents(work, "我的客户端");
+                sb.AppendLine("依赖检测 = " + string.Join(",", deps) + "（应含 子客户端）");
+
+                var ok = renamed == "我的客户端" && jsonOk && idOk && jarOk
+                         && childInherits == "我的客户端" && reject is null && deps.Contains("子客户端");
+                sb.AppendLine(ok ? "CLIENT SELFTEST PASS" : "CLIENT SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("CLIENT SELFTEST FAIL " + ex.Message);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-client.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // Modrinth 自检：检索、文件列表、下载落盘与文件名消毒
         if (e.Args.Contains("--selftest-modrinth"))
         {

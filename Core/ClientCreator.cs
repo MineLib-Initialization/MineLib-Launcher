@@ -86,22 +86,38 @@ public static class ClientCreator
         return new Result(client.Name, versionId, mcver, loaderLabelText, note);
     }
 
-    /// <summary>把 versions/&lt;旧 id&gt; 改成用户起的名字，并同步 json 文件名与继承链里对它的引用。</summary>
-    internal static string? RenameVersionDir(string root, string oldId, string newId, string loaderLabel, string mcver)
+    /// <summary>
+    /// 把 versions/&lt;旧 id&gt; 改成用户起的名字：目录、json 文件名、json 里的 id、
+    /// 该版本的 jar 文件名，以及**其它版本里指向它的 inheritsFrom** 都要跟着改。
+    /// </summary>
+    internal static string? RenameVersionDir(string root, string oldId, string newId, string? loaderLabel = null,
+        string? mcver = null, Action<string>? log = null)
     {
+        if (string.IsNullOrWhiteSpace(newId)) return null;
         if (string.Equals(oldId, newId, StringComparison.OrdinalIgnoreCase)) return oldId;
+
         var versionsDir = Path.Combine(root, "versions");
         var from = Path.Combine(versionsDir, oldId);
         var to = Path.Combine(versionsDir, newId);
-        if (!Directory.Exists(from) || Directory.Exists(to)) return null;
+        if (!Directory.Exists(from))
+        {
+            log?.Invoke("改名失败：找不到版本目录 " + oldId);
+            return null;
+        }
+        if (Directory.Exists(to))
+        {
+            log?.Invoke("改名失败：已经有 " + newId + " 这个版本目录了");
+            return null;
+        }
+
         try
         {
             Directory.Move(from, to);
+
+            // json 文件名 + 内容
             var oldJson = Path.Combine(to, oldId + ".json");
             var newJson = Path.Combine(to, newId + ".json");
             if (File.Exists(oldJson)) File.Move(oldJson, newJson, true);
-
-            // json 里的 id 字段改成新名字；inheritsFrom 仍指向原版版本
             if (File.Exists(newJson))
             {
                 var text = File.ReadAllText(newJson);
@@ -112,11 +128,73 @@ public static class ClientCreator
                     File.WriteAllText(newJson, node.ToJsonString());
                 }
             }
+
+            // 版本自己的 jar（有的话）
+            var oldJar = Path.Combine(to, oldId + ".jar");
+            if (File.Exists(oldJar))
+            {
+                try { File.Move(oldJar, Path.Combine(to, newId + ".jar"), true); }
+                catch (Exception ex) { log?.Invoke("jar 改名失败（不影响启动）：" + ex.Message); }
+            }
+
+            // 其它版本可能 inheritsFrom 指向旧 id，一起改掉，否则它们会变成"缺少父版本"
+            foreach (var dir in Directory.GetDirectories(versionsDir))
+            {
+                if (string.Equals(dir, to, StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (var json in Directory.GetFiles(dir, "*.json"))
+                {
+                    try
+                    {
+                        var text = File.ReadAllText(json);
+                        if (!text.Contains("\"" + oldId + "\"", StringComparison.OrdinalIgnoreCase)) continue;
+                        var node = System.Text.Json.Nodes.JsonNode.Parse(text) as System.Text.Json.Nodes.JsonObject;
+                        if (node is null) continue;
+                        if (!string.Equals(node["inheritsFrom"]?.ToString(), oldId, StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        node["inheritsFrom"] = newId;
+                        File.WriteAllText(json, node.ToJsonString());
+                        log?.Invoke("已把 " + Path.GetFileNameWithoutExtension(json) + " 的 inheritsFrom 改为 " + newId);
+                    }
+                    catch (Exception) { }
+                }
+            }
             return newId;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            log?.Invoke("改名失败：" + ex.Message);
+            // 尽力回滚，避免留下半个版本
+            try { if (Directory.Exists(to) && !Directory.Exists(from)) Directory.Move(to, from); }
+            catch (Exception) { }
             return null;
         }
+    }
+
+    /// <summary>哪些版本继承了某个版本（删掉它就会让这些版本起不来）。</summary>
+    public static List<string> Dependents(string root, string versionId)
+    {
+        var list = new List<string>();
+        try
+        {
+            var versionsDir = Path.Combine(root, "versions");
+            if (!Directory.Exists(versionsDir)) return list;
+            foreach (var dir in Directory.GetDirectories(versionsDir))
+            {
+                var id = Path.GetFileName(dir);
+                if (string.Equals(id, versionId, StringComparison.OrdinalIgnoreCase)) continue;
+                var json = Path.Combine(dir, id + ".json");
+                if (!File.Exists(json)) continue;
+                try
+                {
+                    var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(json));
+                    if (string.Equals(node?["inheritsFrom"]?.ToString(), versionId,
+                            StringComparison.OrdinalIgnoreCase))
+                        list.Add(id);
+                }
+                catch (Exception) { }
+            }
+        }
+        catch (Exception) { }
+        return list;
     }
 }

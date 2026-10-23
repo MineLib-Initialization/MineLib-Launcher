@@ -291,6 +291,8 @@ public static class Workspace
                 var target = Path.Combine(dstVersions, Path.GetFileName(dir));
                 if (Directory.Exists(target))
                 {
+                    // 两边同名版本会被合并，弄不好就是一个坏版本；至少要说清楚
+                    log?.Invoke("⚠ 目标已有同名版本 " + Path.GetFileName(dir) + "，按文件合并（可能互相覆盖）");
                     MergeTree(dir, target, log);
                     continue;
                 }
