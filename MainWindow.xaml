@@ -92,14 +92,11 @@
             </Grid.RowDefinitions>
 
             <StackPanel Grid.Row="0" Margin="12,12,12,0">
-              <TextBlock Text="客户端" Style="{StaticResource SectionTitle}" />
-              <ComboBox x:Name="InstanceCombo" SelectionChanged="OnInstanceChanged">
-                <ComboBox.ItemTemplate>
-                  <DataTemplate>
-                    <TextBlock Text="{Binding Display}" TextTrimming="CharacterEllipsis" />
-                  </DataTemplate>
-                </ComboBox.ItemTemplate>
-              </ComboBox>
+              <DockPanel>
+                <TextBlock DockPanel.Dock="Right" x:Name="LblRootHint" Text="" Style="{StaticResource Faint}"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="120" />
+                <TextBlock Text="客户端" Style="{StaticResource SectionTitle}" Margin="0" />
+              </DockPanel>
             </StackPanel>
 
             <Grid Grid.Row="1" Margin="12,8,12,0">
@@ -111,10 +108,10 @@
               <Button Grid.Column="0" Content="新建" Click="OnNewInstanceClick" Margin="0,0,6,0"
                       Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
                       Background="{StaticResource Panel}" />
-              <Button Grid.Column="1" Content="目录" Click="OnOpenInstanceDirClick" Margin="0,0,6,0"
+              <Button Grid.Column="1" Content="目录" Click="OnOpenDirClick" Margin="0,0,6,0"
                       Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
                       Background="{StaticResource Panel}" />
-              <Button Grid.Column="2" Content="删除" Click="OnDeleteInstanceClick"
+              <Button Grid.Column="2" Content="删除" Click="OnDeleteClientClick"
                       Style="{StaticResource Danger}" BorderBrush="{StaticResource Border}"
                       Background="{StaticResource Panel}" />
             </Grid>
@@ -280,10 +277,7 @@
                     <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                       <StackPanel>
                         <TextBlock Text="启动参数与更新" Style="{StaticResource CardTitle}" />
-                        <TextBlock Text="附加 JVM 参数（留空则用默认）" Style="{StaticResource Faint}"
-                                   Margin="0,0,0,4" />
-                        <TextBox x:Name="TxtJvm" LostFocus="OnJvmChanged" ToolTip="例如 -XX:+UseG1GC" />
-                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
                           <Button x:Name="BtnCheckUpdate" Content="检查更新" Click="OnCheckUpdateClick"
                                   Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
                                   Background="{StaticResource Panel}" Margin="0,0,8,0" />
@@ -316,51 +310,6 @@
                       </StackPanel>
                     </Border>
 
-                    <Border Style="{StaticResource Card}">
-                      <StackPanel>
-                        <TextBlock Text="运行环境" Style="{StaticResource CardTitle}" />
-                        <TextBlock x:Name="ValJava" Text="检测中…" Style="{StaticResource Mono}"
-                                   TextTrimming="CharacterEllipsis" Margin="0,0,0,10" />
-                        <Grid Margin="0,0,0,8">
-                          <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                          </Grid.ColumnDefinitions>
-                          <TextBlock Grid.Column="0" Text="内存" Style="{StaticResource KvLabel}" />
-                          <TextBox Grid.Column="1" x:Name="TxtMemory" Width="72" />
-                          <TextBlock Grid.Column="2" Text="MB" Style="{StaticResource Faint}"
-                                     VerticalAlignment="Center" Margin="6,0,0,0" />
-                        </Grid>
-                        <Grid Margin="0,0,0,10">
-                          <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                          </Grid.ColumnDefinitions>
-                          <TextBlock Grid.Column="0" Text="下载线程" Style="{StaticResource KvLabel}" />
-                          <ComboBox Grid.Column="1" x:Name="ThreadsCombo" Width="72"
-                                    SelectionChanged="OnThreadsChanged" />
-                          <TextBlock Grid.Column="2" Text="越多越快" Style="{StaticResource Faint}"
-                                     VerticalAlignment="Center" Margin="6,0,0,0" />
-                        </Grid>
-                        <CheckBox x:Name="ChkIsolation" Content="版本隔离（模组与存档按版本分开）"
-                                  Click="OnIsolationChanged" Margin="0,0,0,10" />
-                        <WrapPanel>
-                          <Button Content="选择 Java" Click="OnPickJavaClick" Margin="0,0,6,6"
-                                  Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
-                                  Background="{StaticResource Panel}" />
-                          <Button x:Name="BtnFetchJava" Content="下载 Java" Click="OnFetchJavaClick"
-                                  Margin="0,0,6,6" Style="{StaticResource Ghost}"
-                                  BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}" />
-                          <Button Content="更改目录" Click="OnPickGameDirClick" Margin="0,0,0,6"
-                                  Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
-                                  Background="{StaticResource Panel}" />
-                        </WrapPanel>
-                        <TextBlock x:Name="ValGameDir" Text="-" Style="{StaticResource Faint}"
-                                   TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Margin="0,2,0,0" />
-                      </StackPanel>
-                    </Border>
                   </StackPanel>
                 </Grid>
               </ScrollViewer>
@@ -539,13 +488,11 @@
                     <TextBlock Text="客户端名称" Style="{StaticResource Faint}" Margin="0,0,0,4" />
                     <TextBox x:Name="NewNameBox" Margin="0,0,0,10" MaxLength="40" />
 
-                    <TextBlock Text="安装位置" Style="{StaticResource Faint}" Margin="0,0,0,4" />
-                    <DockPanel Margin="0,0,0,10">
-                      <Button DockPanel.Dock="Right" Content="浏览" Click="OnPickInstanceParentClick"
-                              Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
-                              Background="{StaticResource Panel}" Margin="6,0,0,0" />
-                      <TextBox x:Name="NewDirBox" />
-                    </DockPanel>
+                    <TextBlock Text="装到游戏根目录" Style="{StaticResource Faint}" Margin="0,0,0,4" />
+                    <Border Style="{StaticResource FlatCard}" Margin="0,0,0,10">
+                      <TextBlock x:Name="LblCreateRoot" Text="" Style="{StaticResource Mono}"
+                                 TextTrimming="CharacterEllipsis" ToolTip="在设置页可以改游戏根目录" />
+                    </Border>
 
                     <TextBlock Text="模组加载器" Style="{StaticResource Faint}" Margin="0,0,0,4" />
                     <ComboBox x:Name="NewLoaderCombo" Margin="0,0,0,12" />
@@ -759,8 +706,61 @@
                           <TextBlock Grid.Column="0" Text="并发线程" Style="{StaticResource KvLabel}" />
                           <TextBlock Grid.Column="1" x:Name="LblThreadsHint" Text="32" Style="{StaticResource Mono}" />
                         </Grid>
-                        <TextBlock Text="并发数在「启动」页的运行环境里调；单个大文件会自动切成 16 段并发拉取，不受这里控制。"
+                        <TextBlock Text="单个大文件会自动切成 16 段并发拉取，不受这里控制。"
                                    Style="{StaticResource Faint}" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                      <StackPanel>
+                        <TextBlock Text="运行环境（对所有客户端生效）" Style="{StaticResource CardTitle}" />
+                        <TextBlock x:Name="ValJava" Text="检测中…" Style="{StaticResource Mono}"
+                                   TextTrimming="CharacterEllipsis" Margin="0,0,0,10" />
+                        <Grid Margin="0,0,0,8">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Grid.Column="0" Text="内存" Style="{StaticResource KvLabel}" />
+                          <TextBox Grid.Column="1" x:Name="TxtMemory" Width="72" />
+                          <TextBlock Grid.Column="2" Text="MB" Style="{StaticResource Faint}"
+                                     VerticalAlignment="Center" Margin="6,0,0,0" />
+                        </Grid>
+                        <Grid Margin="0,0,0,10">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Grid.Column="0" Text="下载线程" Style="{StaticResource KvLabel}" />
+                          <ComboBox Grid.Column="1" x:Name="ThreadsCombo" Width="72"
+                                    SelectionChanged="OnThreadsChanged" />
+                          <TextBlock Grid.Column="2" Text="越多越快" Style="{StaticResource Faint}"
+                                     VerticalAlignment="Center" Margin="6,0,0,0" />
+                        </Grid>
+                        <CheckBox x:Name="ChkIsolation" Content="版本隔离（模组与存档按版本分开）"
+                                  Click="OnIsolationChanged" Margin="0,0,0,10" />
+                        <TextBlock Text="附加 JVM 参数（留空则用默认）" Style="{StaticResource Faint}"
+                                   Margin="0,0,0,4" />
+                        <TextBox x:Name="TxtJvm" LostFocus="OnJvmChanged" ToolTip="例如 -XX:+UseG1GC" />
+                        <WrapPanel Margin="0,8,0,0">
+                          <Button Content="选择 Java" Click="OnPickJavaClick" Margin="0,0,6,6"
+                                  Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
+                                  Background="{StaticResource Panel}" />
+                          <Button x:Name="BtnFetchJava" Content="下载 Java" Click="OnFetchJavaClick"
+                                  Margin="0,0,6,6" Style="{StaticResource Ghost}"
+                                  BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}" />
+                          <Button x:Name="BtnPickGameDir" Content="更改游戏根目录" Click="OnPickGameDirClick"
+                                  Margin="0,0,0,6" Style="{StaticResource Ghost}"
+                                  BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}" />
+                        </WrapPanel>
+                        <TextBlock Text="游戏根目录（所有客户端都在它的 versions 下）" Style="{StaticResource Faint}"
+                                   Margin="0,4,0,4" TextWrapping="Wrap" />
+                        <Border Style="{StaticResource FlatCard}">
+                          <TextBlock x:Name="ValGameDir" Text="-" Style="{StaticResource Mono}"
+                                     TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                        </Border>
                       </StackPanel>
                     </Border>
                   </StackPanel>

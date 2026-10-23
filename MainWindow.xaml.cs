@@ -101,9 +101,7 @@ public partial class MainWindow : Window
         ValGameDir.Text = _cfg.GameDir;
         NewLoaderCombo.ItemsSource = new[] { "不装（纯原版）", "Fabric", "Quilt", "Forge", "NeoForge" };
         NewLoaderCombo.SelectedIndex = 1;
-        NewDirBox.Text = Path.Combine(AppConfig.Dir, "instances");
         NewNameBox.Text = "我的客户端";
-        RefreshInstanceCombo();
         var threadOptions = new[] { 8, 16, 32, 64 };
         ThreadsCombo.ItemsSource = threadOptions;
         var savedThreads = Math.Clamp(_cfg.DownloadThreads, 4, 64);
@@ -177,6 +175,22 @@ public partial class MainWindow : Window
 
         Loaded += async (_, _) =>
         {
+            // 旧版「一个客户端一个目录」→ 合并成单根目录（只做一次，失败不动原目录）
+            try
+            {
+                var report = await Task.Run(() => Workspace.EnsureSingleRoot(_cfg,
+                    line => Dispatcher.BeginInvoke(() => AppendLog(line))));
+                if (report.Changed)
+                {
+                    _cfg.Save();
+                    SetStatus("已把旧的客户端目录合并进 " + _cfg.GameDir, false);
+                    ValGameDir.Text = _cfg.GameDir;
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("目录迁移失败（原数据保持不动）：" + ex.Message);
+            }
             await RefreshVersionsAsync();
             RefreshAccounts();
             _ = DetectJavaAsync();
@@ -211,20 +225,26 @@ public partial class MainWindow : Window
         }
         if (seq != _versionScanSeq) return;
 
+        // 根目录里已有版本但还没登记成客户端时补登记（加载器的基础版本不登记）
+        if (_cfg.Clients.Count == 0 && list.Count > 0)
+            await Task.Run(() => Workspace.RegisterClientsFromDisk(_cfg));
+
         _all = list;
         ApplyFilter();
-        LblVersionCount.Text = _all.Count == 0 ? "版本（没有找到）" : $"版本（{_all.Count}）";
 
-        if (_all.Count == 0)
+        if (_view.Count == 0)
         {
-            SetStatus("游戏目录里没有版本。先在「下载」页安装一个，或把整合包解压到 versions 里。", false);
-            LblVersionName.Text = "未选择版本";
+            SetStatus(_all.Count == 0
+                ? "游戏根目录里还没有版本。去「下载」页创建一个客户端。"
+                : "没有匹配的客户端，换个关键词试试。", false);
+            LblVersionName.Text = "未选择客户端";
             LblVersionSub.Text = _cfg.GameDir;
+            _current = null;
             return;
         }
 
         var keep = _cfg.Version;
-        _current = _all.FirstOrDefault(v => v.Id == keep) ?? _all[0];
+        _current = _view.FirstOrDefault(v => v.Id == keep) ?? _view[0];
         VersionList.SelectedItem = _current;
         ShowVersion(_current);
         if (Tabs.SelectedIndex == 4) InitModTab();
@@ -234,14 +254,26 @@ public partial class MainWindow : Window
     {
         var q = TxtSearch.Text.Trim();
         _view.Clear();
-        foreach (var v in _all)
+
+        // 客户端 = 配置里登记的版本；磁盘上没有的顺手清掉
+        var alive = new HashSet<string>(_all.Select(v => v.Id), StringComparer.OrdinalIgnoreCase);
+        if (_cfg.Clients.RemoveAll(c => !alive.Contains(c.VersionId)) > 0) _cfg.Save();
+
+        foreach (var client in _cfg.Clients)
         {
+            var v = _all.FirstOrDefault(x => string.Equals(x.Id, client.VersionId, StringComparison.OrdinalIgnoreCase));
+            if (v is null) continue;
+            v.DisplayName = string.IsNullOrWhiteSpace(client.Name) ? null : client.Name;
             if (q.Length > 0 &&
-                v.Id.IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0 &&
+                v.Title.IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0 &&
                 v.McVersion.IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0)
                 continue;
             _view.Add(v);
         }
+
+        LblVersionCount.Text = "客户端（" + _view.Count + "）";
+        LblRootHint.Text = Path.GetFileName(_cfg.GameDir.TrimEnd('\\'));
+        LblCreateRoot.Text = _cfg.GameDir;
     }
 
     private void OnSearchChanged(object sender, TextChangedEventArgs e)
@@ -264,7 +296,9 @@ public partial class MainWindow : Window
     {
         _current = v;
         _cfg.Version = v.Id;
-        LblVersionName.Text = v.Id;
+        var client = _cfg.FindClient(v.Id);
+        LblVersionName.Text = string.IsNullOrWhiteSpace(client?.Name) ? v.Id : client!.Name;
+        LblTitleClient.Text = LblVersionName.Text;
         LblVersionSub.Text = v.Subtitle;
         ValMcVersion.Text = string.IsNullOrEmpty(v.McVersion) ? "-" : v.McVersion;
         ValLoader.Text = v.Loader;
@@ -366,6 +400,8 @@ public partial class MainWindow : Window
         if (dlg.ShowDialog() == true)
         {
             _cfg.GameDir = dlg.FolderName;
+            _cfg.Clients.Clear();      // 新根目录：重新按磁盘上的版本登记
+            _cfg.Version = "";
             _cfg.Save();
             ValGameDir.Text = _cfg.GameDir;
             await RefreshVersionsAsync();
@@ -946,124 +982,60 @@ public partial class MainWindow : Window
         }
     }
 
-    // ---------------------------------------------------------------- 客户端（独立实例）
-    private List<InstanceRef> _instanceItems = new();
-
-    private void RefreshInstanceCombo()
-    {
-        if (_cfg.Instances.Count == 0)
-            _cfg.RegisterInstance("默认客户端", _cfg.GameDir);
-
-        _loadingLoaderCombos = true;
-        try
-        {
-            _instanceItems = _cfg.Instances.ToList();
-            InstanceCombo.ItemsSource = null;
-            InstanceCombo.ItemsSource = _instanceItems;
-            var cur = _instanceItems.FirstOrDefault(i =>
-                string.Equals(i.Dir, _cfg.GameDir, StringComparison.OrdinalIgnoreCase));
-            if (cur is not null) InstanceCombo.SelectedItem = cur;
-            else if (_instanceItems.Count > 0) InstanceCombo.SelectedIndex = 0;
-            LblTitleClient.Text = cur?.Name ?? "默认客户端";
-        }
-        finally
-        {
-            _loadingLoaderCombos = false;
-        }
-    }
-
-    private async void OnInstanceChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_loadingLoaderCombos) return;
-        if (InstanceCombo.SelectedItem is not InstanceRef inst) return;
-        if (string.Equals(inst.Dir, _cfg.GameDir, StringComparison.OrdinalIgnoreCase)) return;
-
-        _cfg.GameDir = inst.Dir;
-        _cfg.CurrentInstance = inst.Dir;
-        _cfg.Version = "";
-        _cfg.Save();
-        ValGameDir.Text = _cfg.GameDir;
-        LblTitleClient.Text = inst.Name;
-        await RefreshVersionsAsync();
-        _ = DetectJavaAsync();
-        SetStatus("已切换到客户端「" + inst.Name + "」", false);
-    }
-
+    // ---------------------------------------------------------------- 客户端（= versions 下的版本）
+    /// <summary>新建客户端：切到下载页，装进当前游戏根目录。</summary>
     private void OnNewInstanceClick(object sender, RoutedEventArgs e)
     {
         Tabs.SelectedIndex = 3;
-        SetStatus("在右边填名字选位置，点「创建新客户端」。", false);
+        SetStatus("在右边填名字、选版本和加载器，点「创建新客户端」——会装进 " + _cfg.GameDir, false);
     }
 
-    private void OnOpenInstanceDirClick(object sender, RoutedEventArgs e) => OpenFolder(_cfg.GameDir);
-
-    private async void OnDeleteInstanceClick(object sender, RoutedEventArgs e)
+    /// <summary>删除选中的客户端：只删这个版本目录，共用文件（libraries/assets）不动。</summary>
+    private async void OnDeleteClientClick(object sender, RoutedEventArgs e)
     {
-        var inst = InstanceCombo.SelectedItem as InstanceRef ?? _cfg.CurrentInstanceRef;
-        if (inst is null)
+        if (_current is null)
         {
-            SetStatus("没有可删除的客户端。", false);
+            SetStatus("没有选中的客户端。", false);
+            return;
+        }
+        var client = _cfg.FindClient(_current.Id);
+        var name = client?.Name ?? _current.Id;
+        if (_proc is { Running: true })
+        {
+            SetStatus("游戏正在运行，先关掉再删。", false);
             return;
         }
 
-        var minecraftRunning = _proc is { Running: true } &&
-                               _cfg.GameDir.StartsWith(inst.Dir, StringComparison.OrdinalIgnoreCase);
-        if (minecraftRunning)
-        {
-            SetStatus("这个客户端正在运行，先关掉游戏再删。", false);
-            return;
-        }
-
+        var vdir = _current.Dir;
         var first = MessageBox.Show(
-            "从启动器里移除客户端「" + inst.Name + "」？" + Environment.NewLine + Environment.NewLine +
-            "目录：" + inst.Dir + Environment.NewLine + Environment.NewLine +
-            "点「是」先移除，之后会再问你要不要删磁盘文件。",
+            "从列表里移除客户端「" + name + "」？" + Environment.NewLine + Environment.NewLine +
+            "版本：" + _current.Id + Environment.NewLine + "目录：" + vdir + Environment.NewLine + Environment.NewLine +
+            "点「是」先移除，之后会再问要不要删磁盘文件。libraries 与 assets 是共用的，不会被删。",
             "删除客户端", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (first != MessageBoxResult.Yes) return;
 
-        _cfg.Instances.RemoveAll(i => string.Equals(i.Dir, inst.Dir, StringComparison.OrdinalIgnoreCase));
-        if (_cfg.Instances.Count == 0)
-        {
-            _cfg.GameDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                ".minecraft");
-            _cfg.CurrentInstance = "";
-        }
-        else if (string.Equals(_cfg.GameDir, inst.Dir, StringComparison.OrdinalIgnoreCase))
-        {
-            _cfg.GameDir = _cfg.Instances[0].Dir;
-            _cfg.CurrentInstance = _cfg.Instances[0].Dir;
-        }
-        _cfg.Version = "";
+        _cfg.RemoveClient(_current.Id);
+        if (string.Equals(_cfg.Version, _current.Id, StringComparison.OrdinalIgnoreCase)) _cfg.Version = "";
         _cfg.Save();
-
-        RefreshInstanceCombo();
-        ValGameDir.Text = _cfg.GameDir;
         await RefreshVersionsAsync();
-        SetStatus("已移除客户端「" + inst.Name + "」", false);
+        SetStatus("已移除客户端「" + name + "」", false);
 
-        if (!Directory.Exists(inst.Dir)) return;
+        if (!Directory.Exists(vdir)) return;
         var second = MessageBox.Show(
-            "连磁盘上的文件一起删掉吗？" + Environment.NewLine + Environment.NewLine + inst.Dir +
-            Environment.NewLine + Environment.NewLine + "这一步不可恢复（存档也在里面）。",
-            "删除文件？", MessageBoxButton.YesNo, MessageBoxImage.Exclamation);
+            "连磁盘上的版本文件一起删掉吗？" + Environment.NewLine + Environment.NewLine + vdir +
+            Environment.NewLine + Environment.NewLine + "这个版本的存档、模组、配置都会没有，不可恢复。",
+            "删除版本文件？", MessageBoxButton.YesNo, MessageBoxImage.Exclamation);
         if (second != MessageBoxResult.Yes) return;
-
         try
         {
-            Directory.Delete(inst.Dir, true);
-            SetStatus("已删除目录 " + inst.Dir, false);
+            Directory.Delete(vdir, true);
+            await RefreshVersionsAsync();
+            SetStatus("已删除 " + vdir, false);
         }
         catch (Exception ex)
         {
-            SetStatus("删除目录失败：" + ex.Message, false);
+            SetStatus("删除失败（文件可能被占用）：" + ex.Message, false);
         }
-    }
-
-    private void OnPickInstanceParentClick(object sender, RoutedEventArgs e)
-    {
-        var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "选择安装位置（客户端会建在这个目录下）" };
-        if (Directory.Exists(NewDirBox.Text)) dlg.InitialDirectory = NewDirBox.Text;
-        if (dlg.ShowDialog() == true) NewDirBox.Text = dlg.FolderName;
     }
 
     // ---------------------------------------------------------------- mods 目录
@@ -1324,13 +1296,11 @@ public partial class MainWindow : Window
 
         try
         {
-            var result = await ClientCreator.CreateAsync(_cfg, NewDirBox.Text, NewNameBox.Text, v.Id,
+            var result = await ClientCreator.CreateAsync(_cfg, NewNameBox.Text, v.Id,
                 loaderLabel, _cfg.DownloadThreads, javaExe, progress,
                 AppendLog, _cts.Token);
 
             ValGameDir.Text = _cfg.GameDir;
-            RefreshInstanceCombo();
-            InstanceCombo.SelectedItem = _instanceItems.FirstOrDefault(x => x.Dir == result.Dir);
             await RefreshVersionsAsync();
             var made = _all.FirstOrDefault(x => x.Id == result.VersionId);
             if (made is not null)
@@ -1338,8 +1308,8 @@ public partial class MainWindow : Window
                 VersionList.SelectedItem = made;
                 ShowVersion(made);
             }
-            LblCreateStatus.Text = "创建完成：" + result.Name + "（" + result.Note + "），已切到这个客户端。";
-            OpenFolder(result.Dir);
+            LblCreateStatus.Text = "创建完成：「" + result.Name + "」（" + result.Note + "），已加到客户端列表。";
+            SetStatus("客户端「" + result.Name + "」已创建", false);
         }
         catch (OperationCanceledException)
         {

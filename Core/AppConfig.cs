@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 
 namespace MineLib.Core;
 
-/// <summary>一个独立客户端：自己的目录、自己的 versions / mods / 存档。</summary>
+/// <summary>旧版模型：一个客户端 = 一个独立游戏目录。迁移用，迁移完清空。</summary>
 public sealed class InstanceRef
 {
     public string Name { get; set; } = "";
@@ -12,6 +12,24 @@ public sealed class InstanceRef
     public string Note { get; set; } = "";
 
     public string Display => string.IsNullOrEmpty(Note) ? Name : Name + "  ·  " + Note;
+}
+
+/// <summary>
+/// 新版模型：客户端就是游戏根目录 versions/ 下的一个版本。
+/// 只有一个游戏根目录，所有客户端并排放在它的 versions 里，libraries/assets 全局共享。
+/// </summary>
+public sealed class ClientEntry
+{
+    /// <summary>versions/ 下的目录名，也是启动时用的版本 id。</summary>
+    public string VersionId { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string McVersion { get; set; } = "";
+    public string Loader { get; set; } = "原版";
+    public string CreatedAt { get; set; } = "";
+
+    public string Display => string.IsNullOrEmpty(McVersion)
+        ? Name
+        : Name + "  ·  " + McVersion + (Loader == "原版" ? "" : " · " + Loader);
 }
 
 /// <summary>启动器配置，存 %APPDATA%\MineLib\config.json。</summary>
@@ -38,7 +56,11 @@ public sealed class AppConfig
     public bool Isolation { get; set; } = true;
     public string AzureClientId { get; set; } = "";
     public string LastAccountKey { get; set; } = "";
-    /// <summary>客户端（游戏实例）列表：每个实例是一个独立的 .minecraft 目录。</summary>
+    /// <summary>客户端列表：每项对应 versions/ 下的一个版本，所有客户端共用一个游戏根目录。</summary>
+    public List<ClientEntry> Clients { get; set; } = new();
+    /// <summary>是否已经把旧的「一个客户端一个目录」合并成单根目录。</summary>
+    public bool SingleRootMigrated { get; set; }
+    /// <summary>旧版模型遗留：旧客户端目录登记表，迁移后清空。</summary>
     public List<InstanceRef> Instances { get; set; } = new();
     public string CurrentInstance { get; set; } = "";
     public List<Account> Accounts { get; set; } = new();
@@ -57,6 +79,7 @@ public sealed class AppConfig
                         cfg.GameDir = Path.Combine(
                             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft");
                     cfg.Accounts ??= new List<Account>();
+                    cfg.Clients ??= new List<ClientEntry>();
                     cfg.Instances ??= new List<InstanceRef>();
                     return cfg;
                 }
@@ -64,17 +87,43 @@ public sealed class AppConfig
         }
         catch (Exception)
         {
-            // 配置损坏就当默认值，避免启动即崩
+            // 配置损坏：退回上一份备份，再不行才用默认值，避免启动即崩
+            try
+            {
+                var bak = FilePath + ".bak";
+                if (File.Exists(bak))
+                {
+                    var cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(bak), JsonOpts);
+                    if (cfg is not null)
+                    {
+                        cfg.Accounts ??= new List<Account>();
+                        cfg.Clients ??= new List<ClientEntry>();
+                        cfg.Instances ??= new List<InstanceRef>();
+                        return cfg;
+                    }
+                }
+            }
+            catch (Exception) { }
         }
         return new AppConfig();
     }
 
+    /// <summary>自检里别把临时配置写进用户真实配置。</summary>
+    public static bool SuppressSave { get; set; }
+
     public void Save()
     {
+        if (SuppressSave) return;
         try
         {
             Directory.CreateDirectory(Dir);
             var tmp = FilePath + ".tmp";
+            try
+            {
+                // 覆盖前留一份上次的配置，配置写坏时还能捞回来
+                if (File.Exists(FilePath)) File.Copy(FilePath, FilePath + ".bak", true);
+            }
+            catch (Exception) { }
             File.WriteAllText(tmp, JsonSerializer.Serialize(this, JsonOpts));
             File.Move(tmp, FilePath, true);
         }
@@ -83,29 +132,28 @@ public sealed class AppConfig
         }
     }
 
-    [System.Text.Json.Serialization.JsonIgnore]
-    public InstanceRef? CurrentInstanceRef =>
-        Instances.FirstOrDefault(i => i.Dir == GameDir) ?? Instances.FirstOrDefault();
-
-    /// <summary>注册一个客户端目录；已存在就复用。</summary>
-    public InstanceRef RegisterInstance(string name, string dir, string note = "")
+    /// <summary>登记一个客户端（对应 versions/ 下的版本）。同名版本会覆盖显示信息。</summary>
+    public ClientEntry RegisterClient(string versionId, string name, string mcVersion, string loader)
     {
-        var found = Instances.FirstOrDefault(i => string.Equals(i.Dir, dir, StringComparison.OrdinalIgnoreCase));
-        if (found is not null)
+        var found = Clients.FirstOrDefault(c => string.Equals(c.VersionId, versionId, StringComparison.OrdinalIgnoreCase));
+        if (found is null)
         {
-            found.Name = name;
-            found.Note = note;
+            found = new ClientEntry { VersionId = versionId, CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm") };
+            Clients.Add(found);
         }
-        else
-        {
-            found = new InstanceRef { Name = name, Dir = dir, Note = note };
-            Instances.Add(found);
-        }
-        GameDir = dir;
-        CurrentInstance = dir;
+        if (!string.IsNullOrWhiteSpace(name)) found.Name = name.Trim();
+        found.McVersion = mcVersion;
+        found.Loader = loader;
+        Version = versionId;
         Save();
         return found;
     }
+
+    public ClientEntry? FindClient(string versionId) =>
+        Clients.FirstOrDefault(c => string.Equals(c.VersionId, versionId, StringComparison.OrdinalIgnoreCase));
+
+    public void RemoveClient(string versionId) =>
+        Clients.RemoveAll(c => string.Equals(c.VersionId, versionId, StringComparison.OrdinalIgnoreCase));
 
     [System.Text.Json.Serialization.JsonIgnore]
     public Account? CurrentAccount =>

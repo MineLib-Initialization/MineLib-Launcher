@@ -17,7 +17,10 @@ public sealed class VersionInfo
     public bool HasJar { get; set; }
     public string MissingParent { get; set; } = "";
 
-    public string Title => Id;
+    /// <summary>客户端列表里显示的名字（用户起的），为空时用版本 id。</summary>
+    public string? DisplayName { get; set; }
+
+    public string Title => string.IsNullOrEmpty(DisplayName) ? Id : DisplayName;
 
     public string LoaderBadge => Loader == "原版" ? "" : Loader;
 
