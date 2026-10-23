@@ -306,6 +306,51 @@ public static class Installer
                                                 " / 共 " + tasks.Count + "），请重试或换下载源");
     }
 
+    /// <summary>
+    /// 1.6 及更早的版本直接用 assets/virtual/legacy 下的散文件，而不是按 hash 取。
+    /// 之前这里从来没被填充过，所以老版本会没有声音和语言文件。
+    /// </summary>
+    public static async Task EnsureVirtualAssetsAsync(string gameDir, JsonObject merged,
+        Action<string>? log, CancellationToken ct)
+    {
+        try
+        {
+            var indexId = merged["assetIndex"]?["id"]?.ToString();
+            if (string.IsNullOrEmpty(indexId)) return;
+            var idxPath = Path.Combine(gameDir, "assets", "indexes", indexId + ".json");
+            if (!File.Exists(idxPath)) return;
+
+            var index = JsonNode.Parse(await File.ReadAllTextAsync(idxPath, ct).ConfigureAwait(false));
+            var isVirtual = index?["virtual"]?.GetValue<bool>() == true;
+            if (!isVirtual) return;
+            if (index?["objects"] is not JsonObject objects) return;
+
+            var virtualRoot = Path.Combine(gameDir, "assets", "virtual", "legacy");
+            Directory.CreateDirectory(virtualRoot);
+            var copied = 0;
+            foreach (var kv in objects)
+            {
+                ct.ThrowIfCancellationRequested();
+                var hash = kv.Value?["hash"]?.ToString();
+                if (string.IsNullOrEmpty(hash) || hash.Length < 2) continue;
+                var src = Path.Combine(gameDir, "assets", "objects", hash[..2], hash);
+                if (!File.Exists(src)) continue;
+                var dst = Path.Combine(virtualRoot, kv.Key.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(dst)) continue;
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+                    File.Copy(src, dst, true);
+                    copied++;
+                }
+                catch (Exception) { }
+            }
+            if (copied > 0) log?.Invoke("已为老版本铺开 " + copied + " 个资源文件到 assets/virtual/legacy");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception) { }
+    }
+
     private static IProgress<Http.BulkProgress>? Wrap(Action<Http.BulkProgress>? onProgress) =>
         onProgress is null ? null : new Progress<Http.BulkProgress>(onProgress);
 

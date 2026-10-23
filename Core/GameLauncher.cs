@@ -40,6 +40,9 @@ public static class GameLauncher
                     new InstallProgress($"资源 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
                         0.5 + 0.5 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct).ConfigureAwait(false);
         }
+        // 老版本（1.6 及更早）用的是散文件资源目录，缺了会没声音没语言
+        await Installer.EnsureVirtualAssetsAsync(gameDir, merged,
+            line => progress?.Report(new InstallProgress(line, 0.99)), ct).ConfigureAwait(false);
         return miss;
     }
 

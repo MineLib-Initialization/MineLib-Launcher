@@ -87,7 +87,31 @@ public partial class App : Application
                 sb.AppendLine("对象齐全时：缺失对象=" + miss2.AssetObjectsMissing + " AssetAny=" +
                               (miss2.AssetIndex || miss2.AssetObjectsMissing > 0) + "（应为 0 / False）");
 
-                var ok = miss1.AssetObjectsMissing == 1 && miss1.Any && miss2.AssetObjectsMissing == 0;
+                // virtual 资源铺开（1.6 及更早）
+                var vIdx = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["virtual"] = true,
+                    ["objects"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["minecraft/sounds/click.ogg"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["hash"] = hash,
+                            ["size"] = 9101
+                        }
+                    }
+                };
+                File.WriteAllText(Path.Combine(idxDir, "legacy.json"), vIdx.ToJsonString());
+                var mergedVirtual = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["id"] = "legacy",
+                    ["assetIndex"] = new System.Text.Json.Nodes.JsonObject { ["id"] = "legacy" }
+                };
+                await Installer.EnsureVirtualAssetsAsync(work, mergedVirtual, null, CancellationToken.None);
+                var virtualFile = Path.Combine(work, "assets", "virtual", "legacy", "minecraft", "sounds", "click.ogg");
+                var virtualOk = File.Exists(virtualFile);
+                sb.AppendLine("virtual 资源铺开 = " + virtualOk + "（" + virtualFile + "）");
+
+                var ok = miss1.AssetObjectsMissing == 1 && miss1.Any && miss2.AssetObjectsMissing == 0 && virtualOk;
                 sb.AppendLine(ok ? "ASSETS SELFTEST PASS" : "ASSETS SELFTEST FAIL");
             }
             catch (Exception ex)
