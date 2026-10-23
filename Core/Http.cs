@@ -405,6 +405,20 @@ public static class Http
         return (ok, failed);
     }
 
+    /// <summary>边下边丢，只用来量吞吐（测速）。</summary>
+    public static async Task<long> ProbeDownloadAsync(string url, CancellationToken ct)
+    {
+        using var resp = await Client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
+            .ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        await using var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        var buf = new byte[1 << 16];
+        long total = 0;
+        int n;
+        while ((n = await src.ReadAsync(buf, ct).ConfigureAwait(false)) > 0) total += n;
+        return total;
+    }
+
     public static string Sha256Of(string path)
     {
         using var fs = File.OpenRead(path);

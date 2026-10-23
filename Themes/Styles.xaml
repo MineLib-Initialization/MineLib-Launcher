@@ -115,7 +115,7 @@
           <Border x:Name="bd" Background="{TemplateBinding Background}"
                   BorderBrush="{TemplateBinding BorderBrush}"
                   BorderThickness="{TemplateBinding BorderThickness}"
-                  CornerRadius="4" SnapsToDevicePixels="True">
+                  CornerRadius="5" SnapsToDevicePixels="True">
             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
                               Margin="{TemplateBinding Padding}" />
           </Border>
@@ -149,7 +149,7 @@
         <ControlTemplate TargetType="Button">
           <Border x:Name="bd" Background="{TemplateBinding Background}"
                   BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
-                  CornerRadius="4" SnapsToDevicePixels="True">
+                  CornerRadius="5" SnapsToDevicePixels="True">
             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
                               Margin="{TemplateBinding Padding}" />
           </Border>
@@ -243,7 +243,7 @@
         <ControlTemplate TargetType="TextBox">
           <Border x:Name="bd" Background="{TemplateBinding Background}"
                   BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+                  BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5">
             <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
                           VerticalAlignment="Center" />
           </Border>
@@ -276,7 +276,7 @@
         <ControlTemplate TargetType="PasswordBox">
           <Border x:Name="bd" Background="{StaticResource Panel}"
                   BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+                  BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5">
             <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
                           VerticalAlignment="Center" />
           </Border>
@@ -313,7 +313,7 @@
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ComboBoxItem">
-          <Border x:Name="bd" Background="Transparent" CornerRadius="4" Margin="3,1"
+          <Border x:Name="bd" Background="Transparent" CornerRadius="5" Margin="3,1"
                   Padding="{TemplateBinding Padding}">
             <ContentPresenter />
           </Border>
@@ -346,7 +346,7 @@
                           IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
                           Focusable="False" ClickMode="Press" />
             <Border x:Name="bd" Background="{StaticResource Panel}"
-                    BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="4"
+                    BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="5"
                     IsHitTestVisible="False">
               <Grid>
                 <Grid.ColumnDefinitions>
@@ -515,7 +515,7 @@
     <Setter Property="Background" Value="{StaticResource Panel}" />
     <Setter Property="BorderBrush" Value="{StaticResource Border}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="5" />
+    <Setter Property="CornerRadius" Value="7" />
     <Setter Property="Padding" Value="16,14" />
   </Style>
 
@@ -523,7 +523,7 @@
     <Setter Property="Background" Value="{StaticResource Rail}" />
     <Setter Property="BorderBrush" Value="{StaticResource Border}" />
     <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="5" />
+    <Setter Property="CornerRadius" Value="6" />
     <Setter Property="Padding" Value="12,10" />
   </Style>
 
@@ -652,7 +652,7 @@
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ToolTip">
-          <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+          <Border Background="{TemplateBinding Background}" CornerRadius="5" Padding="{TemplateBinding Padding}">
             <ContentPresenter />
           </Border>
         </ControlTemplate>

@@ -59,11 +59,31 @@ public partial class MainWindow : Window
         }
     }
 
+    private const double ShellRadius = 10;
+
+    private void OnShellSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        // Border 的圆角只裁自己的背景，不裁子元素；子元素（标题栏、侧栏）是直角矩形，
+        // 所以这里显式给一层圆角矩形裁剪，否则四个角会被子元素盖成直角。
+        if (WindowState == WindowState.Maximized)
+        {
+            RootBorder.Clip = null;
+            return;
+        }
+        RootBorder.Clip = new System.Windows.Media.RectangleGeometry(
+            new Rect(0, 0, RootBorder.ActualWidth, RootBorder.ActualHeight), ShellRadius, ShellRadius);
+    }
+
     private void UpdateWindowChrome()
     {
         // 无边框窗口最大化时会盖住任务栏、边缘也会溢出屏幕，用一层边距补回来
         RootBorder.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
         var maxed = WindowState == WindowState.Maximized;
+        RootBorder.CornerRadius = maxed ? new CornerRadius(0) : new CornerRadius(ShellRadius);
+        RootBorder.Clip = maxed || RootBorder.ActualWidth <= 0
+            ? null
+            : new System.Windows.Media.RectangleGeometry(
+                new Rect(0, 0, RootBorder.ActualWidth, RootBorder.ActualHeight), ShellRadius, ShellRadius);
         GlyphMax.Visibility = maxed ? Visibility.Collapsed : Visibility.Visible;
         GlyphRestore.Visibility = maxed ? Visibility.Visible : Visibility.Collapsed;
         BtnMax.ToolTip = maxed ? "还原" : "最大化";
@@ -89,14 +109,27 @@ public partial class MainWindow : Window
         var savedThreads = Math.Clamp(_cfg.DownloadThreads, 4, 64);
         ThreadsCombo.SelectedItem = threadOptions.FirstOrDefault(t => t >= savedThreads);
         if (ThreadsCombo.SelectedItem is null) ThreadsCombo.SelectedIndex = 1;
+        DownloadSources.Apply(_cfg.DownloadSourceId);
         LblStatusRight.Text = "MineLib " + Updates.Current;
+        TxtWindowTitle.Text = _cfg.WindowTitle;
+        LblConfigDir.Text = AppConfig.FilePath;
+        LblAboutVersion.Text = "MineLib 启动器 " + Updates.Current;
+        LblThreadsHint.Text = _cfg.DownloadThreads.ToString();
+        ApplyWindowTitle();
+        _loadingLoaderCombos = true;
+        try
+        {
+            if (DownloadSources.Current.Id == DownloadSource.Bmclapi.Id) RbSrcBmclapi.IsChecked = true;
+            else RbSrcOfficial.IsChecked = true;
+        }
+        finally { _loadingLoaderCombos = false; }
         Bar.Visibility = Visibility.Collapsed;
         _logTimer.Tick += (_, _) => FlushLog();
         _logTimer.Start();
         StateChanged += (_, _) => UpdateWindowChrome();
         // 调试：MINELIB_TAB=1/2/3 直接打开账号/日志/下载页，便于离屏核对
         if (int.TryParse(Environment.GetEnvironmentVariable("MINELIB_TAB"), out var startTab))
-            Tabs.SelectedIndex = Math.Clamp(startTab, 0, 4);
+            Tabs.SelectedIndex = Math.Clamp(startTab, 0, 5);
         switch (Environment.GetEnvironmentVariable("MINELIB_ACCOUNT"))
         {
             case "ms": RbMicrosoft.IsChecked = true; break;
@@ -112,7 +145,7 @@ public partial class MainWindow : Window
             var outPath = shotArgs[shotIdx + 3];
             Loaded += async (_, _) =>
             {
-                Tabs.SelectedIndex = Math.Clamp(tabIdx, 0, 4);
+                Tabs.SelectedIndex = Math.Clamp(tabIdx, 0, 5);
                 if (tabIdx == 4)
                 {
                     await Task.Delay(600);
@@ -372,6 +405,88 @@ public partial class MainWindow : Window
         {
             _cfg.DownloadThreads = n;
             _cfg.Save();
+            LblThreadsHint.Text = n.ToString();
+        }
+    }
+
+    // ---------------------------------------------------------------- 设置页
+    private void ApplyWindowTitle()
+    {
+        var t = string.IsNullOrWhiteSpace(_cfg.WindowTitle) ? "MineLib 启动器" : _cfg.WindowTitle.Trim();
+        Title = t;
+        LblTitleBrand.Text = t;
+    }
+
+    private void OnTitleChanged(object sender, RoutedEventArgs e)
+    {
+        var t = TxtWindowTitle.Text.Trim();
+        if (t == _cfg.WindowTitle) return;
+        _cfg.WindowTitle = t;
+        _cfg.Save();
+        ApplyWindowTitle();
+        SetStatus(t.Length == 0 ? "标题已清空，使用默认标题" : "标题已改为「" + t + "」", false);
+    }
+
+    private void OnDownloadSourceChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loadingLoaderCombos) return;
+        var id = RbSrcBmclapi.IsChecked == true ? DownloadSource.Bmclapi.Id : DownloadSource.Official.Id;
+        if (id == _cfg.DownloadSourceId) return;
+        _cfg.DownloadSourceId = id;
+        _cfg.Save();
+        DownloadSources.Apply(id);
+        SetStatus("下载源已切换到「" + DownloadSources.Current.Name + "」", false);
+    }
+
+    private async void OnSpeedTestClick(object sender, RoutedEventArgs e)
+    {
+        BtnSpeedTest.IsEnabled = false;
+        BtnSpeedTest.Content = "测速中…";
+        LblSpeedOfficial.Text = "正在测…";
+        LblSpeedBmclapi.Text = "正在测…";
+        try
+        {
+            var results = await Task.WhenAll(DownloadSource.All.Select(async s =>
+            {
+                var r = await s.ProbeAsync(CancellationToken.None);
+                return (s, r);
+            }));
+            foreach (var (s, r) in results)
+            {
+                var text = (r.Ok ? "" : "失败 · ") + r.Detail;
+                if (s.Id == DownloadSource.Official.Id) LblSpeedOfficial.Text = text;
+                else LblSpeedBmclapi.Text = text;
+            }
+            var best = results.Where(x => x.r.Ok)
+                .OrderByDescending(x => x.r.Kbps)
+                .Select(x => x.s.Name).FirstOrDefault();
+            SetStatus(best is null ? "两个下载源都没测通，检查网络" : "测速完成，当前更快的是「" + best + "」", false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus("测速失败：" + ex.Message, false);
+        }
+        finally
+        {
+            BtnSpeedTest.Content = "测速";
+            BtnSpeedTest.IsEnabled = true;
+        }
+    }
+
+    private void OnOpenConfigDirClick(object sender, RoutedEventArgs e) => OpenFolder(AppConfig.Dir);
+
+    private void OnOpenRepoClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("https://github.com/MineLib-Initialization/MineLib-Launcher")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            SetStatus("打不开浏览器：" + ex.Message, false);
         }
     }
 

@@ -25,6 +25,10 @@ public sealed class AppConfig
     public string GameDir { get; set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft");
 
+    /// <summary>启动器标题（窗口标题与标题栏显示的文字）。</summary>
+    public string WindowTitle { get; set; } = "MineLib 启动器";
+    /// <summary>下载源 id：official / bmclapi。</summary>
+    public string DownloadSourceId { get; set; } = "official";
     public string JavaPath { get; set; } = "";
     public int MemoryMb { get; set; } = 4096;
     /// <summary>下载并发数。资源文件几千个小文件，串行会慢到不可用。</summary>

@@ -43,6 +43,69 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 下载源自检：分别用官方与镜像走一遍 清单→版本 json→资源→库，结果写临时文件
+        if (e.Args.Contains("--selftest-source"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-src");
+            try
+            {
+                Directory.CreateDirectory(work);
+                foreach (var s in DownloadSource.All)
+                {
+                    DownloadSources.Apply(s.Id);
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var manifest = await Http.GetJsonAsync(Installer.ManifestUrl);
+                    var versions = manifest["versions"] as System.Text.Json.Nodes.JsonArray;
+                    var entry = versions?.OfType<System.Text.Json.Nodes.JsonObject>()
+                        .FirstOrDefault(v => v["id"]?.ToString() == "1.21.1")
+                        ?? throw new InvalidDataException("清单里没有 1.21.1");
+                    var vjsonUrl = s.VersionJson?.Invoke("1.21.1") ?? entry["url"]!.ToString();
+                    var vj = await Http.GetJsonAsync(vjsonUrl);
+                    var indexUrl = vj["assetIndex"]?["url"]?.ToString() ?? "";
+                    var idxPath = Path.Combine(work, s.Id + "-index.json");
+                    await Http.DownloadAsync(indexUrl, idxPath, null, null);
+                    var idx = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(idxPath));
+                    var obj = idx?["objects"]?.AsObject().FirstOrDefault();
+                    var hash = obj?.Value?["hash"]?.ToString() ?? "";
+                    var assetDest = Path.Combine(work, s.Id + "-asset.bin");
+                    var assetOk = hash.Length >= 2 &&
+                                  await Http.DownloadAsync(s.AssetObject(hash), assetDest, hash);
+                    // 拿一个有 artifact 的官方库验证 maven 地址
+                    var libUrl = "";
+                    var libDest = Path.Combine(work, s.Id + "-lib.jar");
+                    var libOk = false;
+                    if (vj["libraries"] is System.Text.Json.Nodes.JsonArray libs)
+                    {
+                        foreach (var l in libs)
+                        {
+                            if (l is not System.Text.Json.Nodes.JsonObject lo) continue;
+                            if (Installer.LibPath(lo).Length == 0) continue;
+                            var u = Installer.LibUrl(lo);
+                            if (string.IsNullOrEmpty(u)) continue;
+                            libUrl = u;
+                            libOk = await Http.DownloadAsync(u, libDest, null, null);
+                            break;
+                        }
+                    }
+                    sw.Stop();
+                    sb.AppendLine("[" + s.Name + "] 用时 " + sw.Elapsed.TotalSeconds.ToString("0.0") + "s");
+                    sb.AppendLine("  清单      " + Installer.ManifestUrl);
+                    sb.AppendLine("  版本 json " + vjsonUrl);
+                    sb.AppendLine("  资源索引  " + (indexUrl.Length > 80 ? indexUrl[..80] + "…" : indexUrl));
+                    sb.AppendLine("  一个资源  " + (assetOk ? "OK  " : "FAIL ") + s.AssetObject(hash));
+                    sb.AppendLine("  一个库    " + (libOk ? "OK  " : "FAIL ") + libUrl);
+                }
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("SOURCE SELFTEST FAIL " + ex.Message);
+            }
+            DownloadSources.Apply("official");
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-source.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         if (e.Args.Contains("--selftest-java"))
         {
             var sb = new StringBuilder();

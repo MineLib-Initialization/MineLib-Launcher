@@ -10,8 +10,8 @@ public sealed record InstallProgress(string Stage, double Fraction);
 /// <summary>官方源装配：客户端 / libraries / assets 的检查与下载。全部走 Mojang 官方 CDN。</summary>
 public static class Installer
 {
-    public const string ManifestUrl = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
-    private const string ResourceBase = "https://resources.download.minecraft.net";
+    /// <summary>清单地址跟随设置里选的下载源。</summary>
+    public static string ManifestUrl => DownloadSources.Current.ManifestUrl;
 
     private static string CurrentOs =>
         OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "osx" : "linux";
@@ -71,14 +71,19 @@ public static class Installer
     /// </summary>
     public static string? LibUrl(JsonObject lib)
     {
-        var art = lib["downloads"]?["artifact"];
-        if (art?["url"] is JsonNode u && !string.IsNullOrWhiteSpace(u.ToString())) return u.ToString();
-
-        var baseUrl = lib["url"]?.ToString();
-        if (string.IsNullOrWhiteSpace(baseUrl)) return null;
         var path = LibPath(lib);
         if (string.IsNullOrEmpty(path)) return null;
-        return baseUrl.TrimEnd('/') + "/" + path.Replace('\\', '/');
+
+        var artUrl = lib["downloads"]?["artifact"]?["url"]?.ToString();
+        var mavenRoot = lib["url"]?.ToString();
+        var resolved = !string.IsNullOrWhiteSpace(artUrl)
+            ? artUrl!
+            : string.IsNullOrWhiteSpace(mavenRoot)
+                ? null
+                : mavenRoot!.TrimEnd('/') + "/" + path.Replace('\\', '/');
+
+        // 交给当前下载源决定最终地址（镜像只覆盖 Minecraft 自己的库，其它私库原样返回）
+        return DownloadSources.Current.Library(resolved, path);
     }
 
     /// <summary>natives 的 classifier 键（natives-windows-${arch} 这类占位符要替换）。</summary>
@@ -197,7 +202,29 @@ public static class Installer
         var sha1 = merged["downloads"]?["client"]?["sha1"]?.ToString();
         if (string.IsNullOrEmpty(url)) return;
         var dest = ClientJarDest(gameDir, vid);
+        // 镜像按「版本 id」给客户端 jar，版本 id 要用继承链最底下那个原版版本
+        var mirror = DownloadSources.Current.ClientJar;
+        if (mirror is not null)
+        {
+            var rootId = RootVersionId(gameDir, vid);
+            var alt = mirror(rootId);
+            if (await Http.DownloadAsync(alt, dest, sha1, progress, ct).ConfigureAwait(false)) return;
+        }
         await Http.DownloadAsync(url, dest, sha1, progress, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>沿着 inheritsFrom 走到底，拿到原版版本 id。</summary>
+    public static string RootVersionId(string gameDir, string vid)
+    {
+        var cur = vid;
+        var guard = 0;
+        while (!string.IsNullOrEmpty(cur) && guard++ < 12)
+        {
+            var parent = Versions.LoadVersion(gameDir, cur)?["inheritsFrom"]?.ToString();
+            if (string.IsNullOrEmpty(parent)) return cur;
+            cur = parent;
+        }
+        return cur;
     }
 
     public static async Task EnsureLibrariesAsync(string gameDir, JsonObject merged, int threads,
@@ -235,7 +262,7 @@ public static class Installer
         {
             var hash = kv.Value?["hash"]?.ToString();
             if (string.IsNullOrEmpty(hash) || hash.Length < 2) continue;
-            tasks.Add(new Http.DownloadTask($"{ResourceBase}/{hash[..2]}/{hash}",
+            tasks.Add(new Http.DownloadTask(DownloadSources.Current.AssetObject(hash),
                 Path.Combine(gameDir, "assets", "objects", hash[..2], hash), hash,
                 kv.Value?["size"]?.GetValue<long>() ?? 0));
         }
@@ -289,7 +316,9 @@ public static class Installer
             .FirstOrDefault(v => v["id"]?.ToString() == mcver);
         if (entry is null) throw new InvalidOperationException("官方清单里没有版本 " + mcver);
 
-        var raw = (JsonObject)await Http.GetJsonAsync(entry["url"]!.ToString(), ct).ConfigureAwait(false);
+        var vjson = DownloadSources.Current.VersionJson;
+        var raw = (JsonObject)await Http.GetJsonAsync(
+                vjson is null ? entry["url"]!.ToString() : vjson(mcver), ct).ConfigureAwait(false);
         var dir = Path.Combine(gameDir, "versions", mcver);
         Directory.CreateDirectory(dir);
         await File.WriteAllTextAsync(Path.Combine(dir, mcver + ".json"), raw.ToJsonString(), ct)

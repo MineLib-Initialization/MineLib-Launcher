@@ -3,8 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="MineLib 启动器" Height="720" Width="1120" MinHeight="580" MinWidth="900"
-        Background="{StaticResource Bg}" WindowStartupLocation="CenterScreen"
-        WindowStyle="None" ResizeMode="CanResize"
+        Background="Transparent" WindowStartupLocation="CenterScreen"
+        WindowStyle="None" ResizeMode="CanResize" AllowsTransparency="True"
+        SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display">
 
   <shell:WindowChrome.WindowChrome>
@@ -12,8 +13,9 @@
                         CornerRadius="0" UseAeroCaptionButtons="False" />
   </shell:WindowChrome.WindowChrome>
 
-  <Border x:Name="RootBorder" Background="{StaticResource Bg}"
-          BorderBrush="{StaticResource BorderStrong}" BorderThickness="1">
+  <Border x:Name="RootBorder" Background="{StaticResource Bg}" CornerRadius="10"
+          BorderBrush="{StaticResource BorderStrong}" BorderThickness="1"
+          SizeChanged="OnShellSizeChanged">
     <Grid>
       <Grid.RowDefinitions>
         <RowDefinition Height="40" />
@@ -34,8 +36,9 @@
             <Path Data="M9,3.2 L14,6.1 L14,11.9 L9,14.8 L4,11.9 L4,6.1 Z" Fill="#ECFFFFFF"
                   Stretch="Uniform" Margin="3.4" />
           </Border>
-          <TextBlock Text="MineLib" FontSize="12.5" FontWeight="SemiBold" Margin="8,0,0,0"
-                     VerticalAlignment="Center" />
+          <TextBlock x:Name="LblTitleBrand" Text="MineLib" FontSize="12.5" FontWeight="SemiBold"
+                     Margin="8,0,0,0" VerticalAlignment="Center" MaxWidth="360"
+                     TextTrimming="CharacterEllipsis" />
           <Border Width="1" Height="12" Background="{StaticResource Border}" Margin="10,0" />
           <TextBlock x:Name="LblTitleClient" Text="未选择客户端" Style="{StaticResource Dim}"
                      VerticalAlignment="Center" />
@@ -121,14 +124,21 @@
               <TextBox.Template>
                 <ControlTemplate TargetType="TextBox">
                   <Border x:Name="bd" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}"
-                          BorderThickness="1" CornerRadius="4" Padding="26,5,8,5">
+                          BorderThickness="1" CornerRadius="5">
                     <Grid>
-                      <Path x:Name="ico" Data="M6.5,1.5 A5,5 0 1 1 6.49,1.5 M10.2,10.2 L13.6,13.6"
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="28" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <Path Grid.Column="0" Data="M6.5,1.5 A5,5 0 1 1 6.49,1.5 M10.2,10.2 L13.6,13.6"
                             Stroke="{StaticResource TextFaint}" StrokeThickness="1.3"
-                            HorizontalAlignment="Left" VerticalAlignment="Center" Width="15" Height="15" />
-                      <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
-                      <TextBlock x:Name="SearchPlaceholder" Text="搜索版本号或名称"
-                                 Style="{StaticResource Placeholder}" Margin="0,0,0,0" />
+                            HorizontalAlignment="Center" VerticalAlignment="Center" Width="14" Height="14" />
+                      <Grid Grid.Column="1">
+                        <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"
+                                      Margin="0,5,8,5" />
+                        <TextBlock x:Name="SearchPlaceholder" Text="搜索版本号或名称"
+                                   Style="{StaticResource Placeholder}" Margin="0,0,0,0" />
+                      </Grid>
                     </Grid>
                   </Border>
                   <ControlTemplate.Triggers>
@@ -680,6 +690,113 @@
                   </Grid>
                 </Border>
               </Grid>
+            </TabItem>
+
+            <TabItem Header="设置">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+                <Grid Margin="0,0,6,16">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="320" />
+                  </Grid.ColumnDefinitions>
+
+                  <StackPanel Grid.Column="0" Margin="0,0,14,0">
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                      <StackPanel>
+                        <TextBlock Text="外观" Style="{StaticResource CardTitle}" />
+                        <TextBlock Text="启动器标题" Style="{StaticResource Faint}" Margin="0,0,0,4" />
+                        <TextBox x:Name="TxtWindowTitle" LostFocus="OnTitleChanged" MaxLength="40"
+                                 ToolTip="显示在窗口标题与左上角" />
+                        <TextBlock Text="改完点一下别处即可生效，只影响显示，不影响功能。" Style="{StaticResource Faint}"
+                                   Margin="0,6,0,0" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                      <StackPanel>
+                        <DockPanel Margin="0,0,0,10">
+                          <Button DockPanel.Dock="Right" x:Name="BtnSpeedTest" Content="测速"
+                                  Click="OnSpeedTestClick" Style="{StaticResource Ghost}"
+                                  BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}" />
+                          <TextBlock Text="下载源" Style="{StaticResource CardTitle}" Margin="0" />
+                        </DockPanel>
+
+                        <Border Style="{StaticResource FlatCard}" Margin="0,0,0,8">
+                          <StackPanel>
+                            <RadioButton x:Name="RbSrcOfficial" Content="Mojang 官方" GroupName="src"
+                                         Checked="OnDownloadSourceChanged" Margin="0,0,0,4" />
+                            <TextBlock Text="原始来源，海外线路通常更快。" Style="{StaticResource Faint}"
+                                       Margin="23,0,0,0" />
+                            <TextBlock x:Name="LblSpeedOfficial" Text="未测速" Style="{StaticResource Faint}"
+                                       Foreground="{StaticResource TextFaint}" Margin="23,4,0,0" />
+                          </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource FlatCard}">
+                          <StackPanel>
+                            <RadioButton x:Name="RbSrcBmclapi" Content="BMCLAPI 镜像（国内）" GroupName="src"
+                                         Checked="OnDownloadSourceChanged" Margin="0,0,0,4" />
+                            <TextBlock Text="社区镜像，覆盖版本清单、版本 json、客户端 jar、资源与库；模组与加载器私库仍走原地址。"
+                                       Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="23,0,0,0" />
+                            <TextBlock x:Name="LblSpeedBmclapi" Text="未测速" Style="{StaticResource Faint}"
+                                       Foreground="{StaticResource TextFaint}" Margin="23,4,0,0" />
+                          </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="测速会先取一次版本清单量延迟，再下一个 785 KB 的库文件量吞吐。切换后立即生效，已下载的文件不会重下。"
+                                   Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,10,0,0" />
+                      </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}">
+                      <StackPanel>
+                        <TextBlock Text="下载" Style="{StaticResource CardTitle}" />
+                        <Grid Margin="0,0,0,8">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Grid.Column="0" Text="并发线程" Style="{StaticResource KvLabel}" />
+                          <TextBlock Grid.Column="1" x:Name="LblThreadsHint" Text="32" Style="{StaticResource Mono}" />
+                        </Grid>
+                        <TextBlock Text="并发数在「启动」页的运行环境里调；单个大文件会自动切成 16 段并发拉取，不受这里控制。"
+                                   Style="{StaticResource Faint}" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </Border>
+                  </StackPanel>
+
+                  <StackPanel Grid.Column="1">
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                      <StackPanel>
+                        <TextBlock Text="文件位置" Style="{StaticResource CardTitle}" />
+                        <Button Content="打开配置目录" Click="OnOpenConfigDirClick" HorizontalAlignment="Stretch"
+                                Margin="0,0,0,6" Style="{StaticResource Ghost}"
+                                BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}" />
+                        <Button Content="打开游戏目录" Click="OnOpenDirClick" HorizontalAlignment="Stretch"
+                                Margin="0,0,0,6" Style="{StaticResource Ghost}"
+                                BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}" />
+                        <Button Content="打开日志文件" Click="OnOpenLogFileClick" HorizontalAlignment="Stretch"
+                                Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
+                                Background="{StaticResource Panel}" />
+                        <TextBlock x:Name="LblConfigDir" Text="" Style="{StaticResource Faint}" TextWrapping="Wrap"
+                                   Margin="0,10,0,0" />
+                      </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}">
+                      <StackPanel>
+                        <TextBlock Text="关于" Style="{StaticResource CardTitle}" />
+                        <TextBlock x:Name="LblAboutVersion" Text="MineLib" FontSize="15" FontWeight="SemiBold" />
+                        <TextBlock Text="启动器本体重写，界面自绘，不含广告，不收集使用数据。游戏文件由 Mojang 官方清单或所选镜像下发，程序本身不托管游戏文件。"
+                                   Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,6,0,10" />
+                        <Button Content="打开项目主页" Click="OnOpenRepoClick" HorizontalAlignment="Left"
+                                Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
+                                Background="{StaticResource Panel}" />
+                      </StackPanel>
+                    </Border>
+                  </StackPanel>
+                </Grid>
+              </ScrollViewer>
             </TabItem>
           </TabControl>
         </Grid>
