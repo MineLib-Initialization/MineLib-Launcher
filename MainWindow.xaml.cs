@@ -214,14 +214,33 @@ public partial class MainWindow : Window
             _ = CheckUpdatesAsync(false);
             ShowAppliedNotes();
         };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => LogCloseTiming("ProcessExit");
         Closing += (_, _) =>
         {
-            // 先让窗口消失，清理（存配置、收掉游戏进程）放到后面做，
-            // 用户在关窗时不该看到窗口先卡一下再消失
-            _logTimer.Stop();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            // 关闭路径上不做任何可能阻塞的事：不写盘、不等进程、不动网络。
+            // 配置几乎每次改动都已保存过；剩下的清理丢到后台，窗口立刻消失。
+            try { _logTimer.Stop(); } catch (Exception) { }
+            try { _cts?.Cancel(); } catch (Exception) { }
+            try { _updateCts.Cancel(); } catch (Exception) { }
             try { Visibility = Visibility.Hidden; } catch (Exception) { }
-            try { SaveSettings(); } catch (Exception) { }
-            try { _proc?.Stop(); } catch (Exception) { }
+            var max = _cfg.MemoryMb;
+            var jvm = TxtJvm.Text;
+            var iso = ChkIsolation.IsChecked == true;
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    _cfg.MemoryMb = int.TryParse(TxtMemory.Text, out var mb) ? Math.Clamp(mb, 512, 32768) : max;
+                    _cfg.JvmArgs = jvm;
+                    _cfg.Isolation = iso;
+                    _cfg.Save();
+                }
+                catch (Exception) { }
+                try { _proc?.Stop(); } catch (Exception) { }
+                LogCloseTiming("后台清理完成", sw.ElapsedMilliseconds);
+            });
+            LogCloseTiming("Closing 处理结束", sw.ElapsedMilliseconds);
         };
     }
 
@@ -480,6 +499,18 @@ public partial class MainWindow : Window
         }
     }
 
+    private static void LogCloseTiming(string stage, long ms = -1)
+    {
+        try
+        {
+            var path = Path.Combine(Path.GetTempPath(), "minelib-close.log");
+            var line = DateTime.Now.ToString("HH:mm:ss.fff") + "  " + stage +
+                       (ms >= 0 ? "  (" + ms + " ms)" : "") + Environment.NewLine;
+            File.AppendAllText(path, line);
+        }
+        catch (Exception) { }
+    }
+
     private void ApplyWindowTitle()
     {
         var t = string.IsNullOrWhiteSpace(_cfg.WindowTitle) ? "MineLib 启动器" : _cfg.WindowTitle.Trim();
@@ -570,6 +601,16 @@ public partial class MainWindow : Window
     {
         _cfg.JvmArgs = TxtJvm.Text;
         _cfg.Save();
+    }
+
+    private void OnMemoryChanged(object sender, RoutedEventArgs e)
+    {
+        if (int.TryParse(TxtMemory.Text, out var mb))
+        {
+            _cfg.MemoryMb = Math.Clamp(mb, 512, 32768);
+            _cfg.Save();
+            LblStatusRight.Text = $"Java {_javaMajor} · 内存 {_cfg.MemoryMb} MB";
+        }
     }
 
     private void SaveSettings()
@@ -957,13 +998,14 @@ public partial class MainWindow : Window
     }
 
     private Updates.UpdateInfo? _pendingUpdate;
+    private readonly CancellationTokenSource _updateCts = new();
 
     private async Task CheckUpdatesAsync(bool manual)
     {
         if (manual) SetStatus("检查更新…", true);
         try
         {
-            var info = await Updates.CheckAsync(CancellationToken.None);
+            var info = await Updates.CheckAsync(_updateCts.Token);
             if (info is null)
             {
                 LblUpdateState.Text = "已是最新（" + Updates.Current + "）";
@@ -981,7 +1023,7 @@ public partial class MainWindow : Window
                 if (manual) Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
             });
             await Updates.StageAsync(info, progress,
-                AppendLog, CancellationToken.None);
+                AppendLog, _updateCts.Token);
             LblUpdateState.Text = "新版本 " + info.Version + " 已就绪，下次启动自动更新";
             SetStatus("更新已下载，" + info.Version + " 将在下次启动时生效", false);
             BtnCheckUpdate.Content = "重启并更新";

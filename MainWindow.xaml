@@ -763,7 +763,7 @@
                             <ColumnDefinition Width="*" />
                           </Grid.ColumnDefinitions>
                           <TextBlock Grid.Column="0" Text="内存" Style="{StaticResource KvLabel}" />
-                          <TextBox Grid.Column="1" x:Name="TxtMemory" Width="72" />
+                          <TextBox Grid.Column="1" x:Name="TxtMemory" Width="72" LostFocus="OnMemoryChanged" />
                           <TextBlock Grid.Column="2" Text="MB" Style="{StaticResource Faint}"
                                      VerticalAlignment="Center" Margin="6,0,0,0" />
                         </Grid>
