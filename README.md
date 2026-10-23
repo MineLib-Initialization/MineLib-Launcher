@@ -1,135 +1,155 @@
-# MineLibLauncher
+# MineLib 启动器
 
-《我的世界》Java 版启动器。自己写的 WPF 界面（不用任何第三方启动器的 UI 资源），核心只是一件事：
-读版本 json、装配官方文件、把游戏跑起来。
+Windows 上的 Minecraft Java 版启动器，C# / .NET 8 / WPF，界面自绘（不使用任何第三方启动器的 UI 资源）。
+程序自身不托管、不镜像任何游戏文件：所有下载都指向 Mojang 官方地址或你在设置里选的镜像。
 
-- 目标框架：.NET 8（WPF），单进程，无数据库
-- 界面：标准窗口 + 原生控件，中性灰配色 + 一个钢蓝强调色；无渐变、无阴影堆叠、无图标字体
-- 数据来源：Mojang 官方 CDN（version_manifest_v2 / piston-data / resources）与 mod 作者的官方接口
+当前版本：**0.11.0**
 
 ## 功能
 
-| 模块 | 状态 |
+- **客户端管理**：一个客户端文件夹（游戏根目录）下并排放多个客户端，共用 libraries 与 assets；也可以登记多个客户端文件夹随时切换。
+- **版本与加载器**：读 Mojang 官方清单的全部版本（正式版/快照可筛可选）；支持 Fabric、Quilt、Forge、NeoForge，默认选稳定版。
+- **模组**：调用 Modrinth 官方 API 检索、按加载器与游戏版本筛选、下载到 mods。
+- **账号**：离线、外置登录（Yggdrasil + authlib-injector）、微软正版（链路已实现，见"已知限制"）。
+- **Java**：自动查找本机 Java；找不到时按游戏版本从 Eclipse Adoptium 取一份 JRE 到程序目录的 `MineLib\java`。
+- **下载加速**：连接池 64、默认并发 32（可调 4/8/16/32/64）、单个大文件分 16 段并发、支持 HTTP/2、jar 与依赖库并行下载。
+- **下载源**：设置里可切换「Mojang 官方」/「BMCLAPI 镜像」，自带一键测速。
+- **自动更新**：启动时比对官网清单，优先下载增量补丁（通常几百 KB），下次启动替换并弹窗列出改动；任何一步校验失败自动回落整包。
+- **日志**：游戏输出实时进界面（批量刷新）并落盘到 `<游戏目录>\logs\minelib-<时间>.log`。
+- **崩溃兜底**：未处理异常写进 `<配置目录>\logs\crash-*.log`，界面不会因为一个异常直接退出。
+
+## 运行要求
+
+| 项目 | 要求 |
 |---|---|
-| 版本扫描与切换 | 读 `versions/*/*.json`，解析 inheritsFrom 链，识别 Fabric / Forge / NeoForge / OptiFine / 原版 |
-| 启动 | 合并继承链 → 过滤 rules → 拼 classpath → 解压老版本 natives → 替换启动参数 → 起进程并实时收日志 |
-| 文件装配 | 缺客户端 jar / 依赖库 / 资源索引时，按 json 里的官方地址补齐 |
-| 安装版本 | 「下载」页列出官方清单，可安装任意正式版/快照（首次会下全部 libraries 与 assets） |
-| 安装加载器 | Fabric / Quilt / Forge / NeoForge / LiteLoader，装完自动打开 mods 文件夹 |
-| 模组下载 | 「模组」页直连 Modrinth 检索，按加载器/游戏版本筛选，下载直接落到 mods |
-| 登录 | 微软正版（设备码 OAuth）、外置登录（Yggdrasil + authlib-injector）、离线 |
-| 设置 | 游戏目录、Java 路径、内存上限、版本隔离、额外 JVM 参数、Azure client id |
+| 系统 | Windows 10 / 11 x64 |
+| 运行时 | 单文件自包含，不需要另装 .NET |
+| Java | 1.17+ 需 Java 17/21，1.12.2 及更早需 Java 8（可用「下载 Java」自动获取） |
+| 磁盘 | 单个客户端通常在 1 GB 量级 |
 
-## 三种登录的区别
-
-- **微软正版**：设备码流程（device code），界面上只有一个「用 Microsoft 账号登录」按钮。
-  client id 由启动器自带（见下），**终端用户不需要配置任何东西**。
-
-### 微软登录：维护者一次性配置（用户无感）
-
-一条命令搞定（会弹浏览器让你登录，脚本不碰你的密码）：
-
-	powershell -ExecutionPolicy Bypass -File .\setup-azure-clientid.ps1
-
-脚本做四件事：检查/安装 Azure CLI → 让你在浏览器里登录 → 创建名为 \`MineLib Launcher\` 的应用
-（sign-in audience 为 PersonalMicrosoftAccount，并打开 isFallbackPublicClient，即设备码必需的「允许公共客户端流」）
-→ 把 client id 写进 \`clientid.txt\` 和 \`Core/Accounts.cs\` 的 \`DefaultClientId\`。
-跑完重新 \`dotnet publish\` 即可，终端用户零配置。
-
-手动做也可以（门户路径）：
-
-微软要求请求方必须是一个已注册的应用，所以 client id 只能由发布者带在程序里 —— HMCL、Prism 都是这么做的，
-这个 id 是公开信息，不是密钥。
-
-1. 打开 portal.azure.com → App registrations → New registration；
-2. Supported account types 选「仅个人 Microsoft 账户」（Accounts in this organizational directory only 以外的
-   **Personal Microsoft accounts only**）；
-3. 注册完在 Authentication 里把 **Allow public client flows** 打开（设备码流程必须）；
-4. 复制 Application (client) ID，三选一填进去：
-
-| 方式 | 操作 | 适用 |
-|---|---|---|
-| 写死 | 填 `Core/Accounts.cs` 的 `MicrosoftAuth.DefaultClientId` 后重新构建 | 正式发布，推荐 |
-| 旁挂文件 | 在 exe 同目录放 `clientid.txt`，内容就是 id | 不重新编译先试 |
-| 环境变量 | 设 `MINELIB_CLIENT_ID` | 临时调试 |
-
-优先级：`config.json` 的 `AzureClientId` → `MINELIB_CLIENT_ID` → `clientid.txt` → `DefaultClientId`。
-没配置时点登录会给出提示，而不是弹一个让用户填 id 的框。
-- **外置登录**：Yggdrasil 协议（LittleSkin、Blessing Skin 等）。登录后启动时注入 authlib-injector，
-  注入器从作者官方 meta 按需下载，不随本项目分发。皮肤/披风来自该站点。
-- **离线**：本地起一个名字，UUID 用 Java 的 `OfflinePlayer:` 算法算（与 vanilla 一致），不向 Mojang 发任何请求。
-  服务器必须开着 `online-mode=false` 才进得去。不做任何伪造令牌或改客户端的事。
-
-## 编译与运行
-
-	dotnet build -c Release
-	dotnet run -c Release
-
-产物：`bin/Release/net8.0-windows/MineLibLauncher.exe`（自包含需要在 csproj 里加 RuntimeIdentifier 后 publish）。
-
-配置存 `%APPDATA%\MineLib\config.json`；账号（含 token）也在里面，注意别同步到公开位置。
-
-## 目录
-
-	Core/AppConfig.cs     配置读写（含账号列表）
-	Core/Http.cs          带 UA 的请求、带 sha1 校验的下载
-	Core/Versions.cs      版本扫描、继承合并、加载器识别
-	Core/JavaFinder.cs    Java 探测（配置 → 官方 runtime → PATH → 常见安装目录）
-	Core/Accounts.cs      三种登录
-	Core/Installer.cs     官方源装配（client / libraries / assets / natives）
-	Core/GameLauncher.cs  启动参数构建 + 进程与日志
-	MainWindow.xaml(.cs) 界面
-
-## 已知不足
-
-- 只支持 Fabric / Forge 的「已安装版本」；从零安装 Forge/NeoForge 需要跑它们自己的 installer（未实现）。
-- 资源文件首次安装约 400 MB，按当前网络可能要很久；中断后重进会跳过已下载的文件。
-- 不做模组下载/更新、不做整合包导入向导、没有皮肤预览。
-- 微软登录需要自备 Azure client id，这是账号体系决定的，不是可以绕过的步骤。
-## 界面结构
-
-    ┌ 工具栏：搜索 / 刷新 / 安装新版本 / 打开游戏目录
-    ├ 左 272px：版本列表（选中项左侧 2px 强调色竖条）
-    ├ 右上：版本名 + 副标题 + 启动/停止
-    └ 标签页
-        启动   双列卡片：游戏版本 / 账号 / 最近日志｜快捷入口 / 运行环境（含目录）
-        账号   三种登录方式 + 已保存账号
-        日志   运行时输出（只读等宽）+ 打开日志文件
-        下载   官方版本清单 + 安装进度
-
-配色只有中性灰加一个钢蓝：`#F4F4F5` 底、白面板、`#DCDCE0` 1px 分隔、`#35618E` 强调。
-没有渐变、阴影堆叠、圆角胶囊和图标字体——所有控件都是 WPF 原生渲染，样式集中在 `Themes/Styles.xaml`。
-## 加载器安装
-
-| 加载器 | 做法 | 备注 |
-|---|---|---|
-| Fabric | 取官方 meta 的 profile/json 写进 versions/fabric-loader-<loader>-<mc>/ | 纯文本，秒装，不需要 Java |
-| Quilt | 同上，数据来自 meta.quiltmc.org | 同上 |
-| Forge | 下载 forge-<mc>-<ver>-installer.jar，跑 java -jar ... --installClient <gameDir> | 需要 Java，会顺带准备 launcher_profiles.json |
-| NeoForge | 下载 neoforge-<ver>-installer.jar，同样走 --installClient | 版本号按 MC 映射（1.21.1 → 21.1.x） |
-| LiteLoader | 只有图形界面安装器，下载后交给它自己跑 | 仅支持到 1.12.2 这类老版本 |
-
-装完会选中新版本并打开 mods 目录（开了版本隔离就是版本目录里的 mods）。
-
-## 模组页
-
-左侧检索走 Modrinth 官方 API，用 project_type:mod + 加载器 + 游戏版本三个 facet 过滤，
-列表显示图标、简介、许可证和下载量；右侧显示选中项目的可用版本文件，点「下载并放到 mods」写进 mods 目录。
-不镜像、不改文件，拿的就是作者的 CDN 链接。
-
-自检：MineLibLauncher.exe --selftest 会把加载器版本列表、Modrinth 检索、一次 Fabric 安装的结果
-写到 %TEMP%\minelib-selftest.txt，不开界面。
-## 微软正版登录：当前不可用（微软侧限制）
-
-自己注册的 Azure 应用无法登录 Minecraft：`/authentication/login_with_xbox` 会返回
+## 目录结构（便携）
 
 ```
-HTTP 403  {"path":"/authentication/login_with_xbox",
-           "errorMessage":"Invalid app registration, see https://aka.ms/AppRegInfo for more information"}
+<启动器目录>\
+├─ MineLibLauncher.exe
+├─ MineLibLauncher\          配置、安装器缓存、自带 Java、崩溃日志
+│   ├─ config.json
+│   ├─ config.json.bak
+│   ├─ java\
+│   ├─ installers\
+│   └─ logs\crash-*.log
+└─ .minecraft\               默认客户端文件夹
+    ├─ versions\             每个客户端一个版本目录
+    ├─ libraries\  assets\   所有客户端共用
+    └─ mods\  saves\
 ```
 
-即使应用配置完全正确（个人账户受众 + 允许公共客户端流 + 设备码流程）也一样。
-微软现在只给获批的应用开这个口子，HMCL / Prism / PCL 用的是它们多年前获批的应用身份。
-整条链路的前三步（MSA 令牌 → Xbox Live → XSTS）在本项目里是通的，卡在最后一步。
+启动器目录不可写时（例如放在 Program Files）自动回退到 `%APPDATA%\MineLib` 与 `%APPDATA%\.minecraft`，设置页会显示当前实际位置。
 
-因此本启动器实际可用的是：**外置登录（authlib-injector + Yggdrasil）** 与 **离线**。
+## 界面
+
+顶部四个全局页签：
+
+- **客户端**：左侧客户端文件夹下拉 + 客户端列表，右侧是所选版本、账号、最近日志；「启动游戏」在右上角。
+- **下载**：官方版本列表 +「下载并安装」；子页签「模组」检索 Modrinth。
+- **账号**：三种登录方式与已保存账号。
+- **设置**：启动器标题、下载源与测速、运行环境（内存 / Java / JVM 参数 / 版本隔离 / 并发）、文件位置、迁移到启动器目录。
+
+旧版本（"一个客户端一个独立 .minecraft 目录"）的数据会在启动时自动合并进当前客户端文件夹，只做一次。
+
+## 配置文件
+
+`config.json` 主要字段：
+
+| 字段 | 说明 |
+|---|---|
+| `GameDir` | 当前客户端文件夹 |
+| `Roots` | 所有客户端文件夹及其中的客户端列表 |
+| `WindowTitle` | 启动器标题 |
+| `DownloadSourceId` | `official` 或 `bmclapi` |
+| `MemoryMb` / `JvmArgs` / `Isolation` | 运行环境 |
+| `DownloadThreads` | 下载并发 |
+| `JavaPath` | 手动指定的 javaw.exe |
+| `Version` | 上次选中的客户端 |
+| `Accounts` | 账号（外置登录会保存 token） |
+
+写入是「先写临时文件再替换」，覆盖前保留一份 `config.json.bak`；主文件损坏时自动回退备份。
+
+## 命令行（调试与自检）
+
+全部写到 `%TEMP%\minelib-*.txt`，不开界面、不写用户配置：
+
+| 参数 | 验证内容 |
+|---|---|
+| `--selftest-migrate` | 旧多目录数据合并；版本改名连带更新 jar 与 inheritsFrom |
+| `--selftest-update` | 更新替换脚本：成功替换 / 目标被占用时保留暂存 |
+| `--selftest-http` | 下载去重、取消后不留 .part、sha1 校验 |
+| `--selftest-assets` | 资源对象缺失检测、1.6 及更早的 virtual 资源铺开 |
+| `--selftest-loader` | 安装器结果识别、Fabric 真实安装 |
+| `--selftest-args` | 启动参数占位符替换、超长 classpath 走 @argfile |
+| `--selftest-client` | 客户端改名、依赖检测 |
+| `--selftest-auth` | 离线 UUID 与 Java 一致、注入器就位、错误提示 |
+| `--selftest-javafind` | Java 探测与缓存、Adoptium 版本映射 |
+| `--selftest-modrinth` | 检索、文件列表、下载落盘与文件名消毒 |
+| `--selftest-log` | 日志批量刷盘的吞吐与完整性 |
+| `--selftest-crash` | 全局异常兜底与崩溃日志 |
+
+其它：`--selftest`（加载器/模组接口）、`--selftest-download`（下载测速）、`--selftest-java <主版本>`（自动获取 Java）、`--selftest-create`（装一个客户端到临时目录）、`--selftest-source`（下载源逐项验证）、`--mkpatch <旧exe> <新exe> <补丁>`（生成增量补丁）、`--shot <页签> <查询> <输出.png>`（离屏渲染界面图）。
+
+## 从源码构建
+
+需要 .NET 8 SDK：
+
+```powershell
+dotnet build -c Release
+
+# 单文件自包含（发布用）
+dotnet publish -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:EnableCompressionInSingleFile=false -p:DebugType=None
+```
+
+> 单文件包特意**不启用内压缩**：启用后任何一处代码改动都会让整包的字节布局变化，
+> 增量补丁就退化回整包下载。代价是 exe 体积变大（约 138 MB），但 zip 与压缩版基本一致。
+
+发布流程见 `release.ps1`：改版本号 → publish → 打包 → 生成增量补丁（CDC + Brotli）→ 分片并发上传 → 写更新清单 → 发 GitHub Release → 部署站点 → 提交。
+
+## 已知限制
+
+- **微软正版登录**：Minecraft 服务只接受微软批准的应用身份。自建 Azure 应用调用 `login_with_xbox` 会返回 403 `Invalid app registration`。链路代码完整，取得授权前该入口不可用。
+- **外置登录令牌刷新**未实现：token 过期后需要重新输入密码。
+- **删除客户端**只删该版本目录；若有别的客户端 `inheritsFrom` 指向它，删除后那些客户端会因缺少父版本无法启动（删除前会列出依赖者并警告）。
+- **Forge / NeoForge** 依赖各自官方安装器，安装器行为不受本程序控制；安装器超过 30 分钟未结束会被中止。
+- **32 位系统**未适配：Java 自动获取只提供 x64 / aarch64 包。
+- **数据来源**：版本清单与文件来自 Mojang；模组来自 Modrinth；镜像可选 BMCLAPI。程序不做任何破解、不绕过正版验证、不提供加速器。
+
+## 项目结构
+
+```
+Core/
+  AppConfig.cs       配置（客户端文件夹 / 账号 / 设置）+ 载入、保存、归一化
+  Paths.cs           便携路径（启动器目录，回退 AppData）
+  Workspace.cs       旧数据迁移（多目录合并、搬家）
+  Versions.cs        版本扫描、继承链合并、版本号归一化
+  Installer.cs       官方文件补齐、资源与库下载、natives 解压、virtual 资源
+  Loaders.cs         加载器版本列表与安装（Fabric / Quilt / Forge / NeoForge）
+  ClientCreator.cs   客户端创建、改名、依赖检测
+  GameLauncher.cs    启动参数装配、进程与日志管道
+  GameLog.cs         日志批量写入
+  Http.cs            下载（并发、分段、重试、去重）
+  DownloadSources.cs 官方 / BMCLAPI 下载源与测速
+  Modrinth.cs        模组检索、下载、图标缓存
+  Accounts.cs        离线 / 外置 / 微软登录
+  JavaFinder.cs      Java 查找与主版本探测（带缓存）
+  JavaProvisioner.cs 从 Adoptium 获取 JRE
+  Updates.cs         自动更新与增量补丁应用
+  Patcher.cs         CDC 分块 + Brotli 补丁
+  CrashReporter.cs   崩溃日志
+MainWindow.xaml(.cs) 界面与交互
+Themes/Styles.xaml   自绘控件样式
+```
+
+## 许可与声明
+
+Minecraft 是 Mojang Studios 与 Microsoft 的商标及版权作品，本项目与其无隶属关系。
+程序不包含、不分发任何游戏文件；所有游戏内容都由启动器按官方清单中的地址下载。
