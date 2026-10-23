@@ -78,7 +78,7 @@ public static class ClientCreator
     }
 
     /// <summary>把 versions/&lt;旧 id&gt; 改成用户起的名字，并同步 json 文件名与继承链里对它的引用。</summary>
-    private static string? RenameVersionDir(string root, string oldId, string newId, string loaderLabel, string mcver)
+    internal static string? RenameVersionDir(string root, string oldId, string newId, string loaderLabel, string mcver)
     {
         if (string.Equals(oldId, newId, StringComparison.OrdinalIgnoreCase)) return oldId;
         var versionsDir = Path.Combine(root, "versions");

@@ -75,10 +75,45 @@
       </Grid>
 
       <Grid Grid.Row="1">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="272" />
-          <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 全局页签：客户端 / 下载 / 账号 / 设置 -->
+        <Border Grid.Row="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border}"
+                BorderThickness="0,0,0,1" Padding="12,0">
+          <Grid x:Name="TabStripRoot">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal" x:Name="TabStrip">
+              <Button x:Name="BtnTabClient" Tag="client" Content="客户端" Click="OnGlobalTabClick"
+                      Style="{StaticResource TabButton}" />
+              <Button x:Name="BtnTabDownload" Tag="download" Content="下载" Click="OnGlobalTabClick"
+                      Style="{StaticResource TabButton}" />
+              <Button x:Name="BtnTabAccount" Tag="account" Content="账号" Click="OnGlobalTabClick"
+                      Style="{StaticResource TabButton}" />
+              <Button x:Name="BtnTabSettings" Tag="settings" Content="设置" Click="OnGlobalTabClick"
+                      Style="{StaticResource TabButton}" />
+            </StackPanel>
+            <Border x:Name="TabIndicator" Grid.Column="0" Height="2" Width="40"
+                    Background="{StaticResource Accent}" VerticalAlignment="Bottom"
+                    HorizontalAlignment="Left" CornerRadius="1" Margin="0,0,0,-1">
+              <Border.RenderTransform>
+                <TranslateTransform x:Name="TabIndicatorShift" X="0" />
+              </Border.RenderTransform>
+            </Border>
+          </Grid>
+        </Border>
+
+        <Grid Grid.Row="1">
+          <Grid x:Name="PaneClient">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="272" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
 
         <Border Grid.Column="0" Background="{StaticResource Rail}"
                 BorderBrush="{StaticResource Border}" BorderThickness="0,1,1,0">
@@ -198,11 +233,11 @@
           </Grid>
         </Border>
 
-        <Grid Grid.Column="1">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-          </Grid.RowDefinitions>
+            <Grid Grid.Column="1">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+              </Grid.RowDefinitions>
 
           <Border Grid.Row="0" Background="{StaticResource Panel}"
                   BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,1" Padding="18,10">
@@ -223,7 +258,7 @@
             </DockPanel>
           </Border>
 
-          <TabControl Grid.Row="1" x:Name="Tabs" SelectionChanged="OnTabChanged" Margin="18,0,18,4">
+              <TabControl Grid.Row="1" x:Name="Tabs" Margin="18,0,18,4">
             <TabItem Header="启动">
               <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
                 <Grid Margin="0,0,6,16">
@@ -314,99 +349,6 @@
                 </Grid>
               </ScrollViewer>
             </TabItem>
-
-            <TabItem Header="账号">
-              <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
-                <StackPanel Margin="0,0,6,16" MaxWidth="760" HorizontalAlignment="Left">
-                  <TextBlock Text="当前账号" Style="{StaticResource SectionTitle}" />
-                  <TextBlock x:Name="ValAccountBig" Text="未登录" FontSize="15" Margin="0,0,0,3" />
-                  <TextBlock x:Name="ValAccountNote" Text="没有账号时只能用离线模式启动"
-                             Style="{StaticResource Faint}" Margin="0,0,0,14" />
-
-                  <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                    <RadioButton x:Name="RbMicrosoft" Content="微软正版" GroupName="login"
-                                 Checked="OnLoginModeChanged" />
-                    <RadioButton x:Name="RbYggdrasil" Content="外置登录" GroupName="login"
-                                 Checked="OnLoginModeChanged" />
-                    <RadioButton x:Name="RbOffline" Content="离线" GroupName="login" IsChecked="True"
-                                 Checked="OnLoginModeChanged" />
-                  </StackPanel>
-
-                  <Border x:Name="PanelMicrosoft" Style="{StaticResource Card}" Visibility="Collapsed">
-                    <StackPanel>
-                      <TextBlock Text="用正版账号登录后，进正版服、皮肤、Realms 都正常。登录一次长期有效，过期会自动续期。"
-                                 Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,0,0,10" />
-                      <StackPanel Orientation="Horizontal">
-                        <Button x:Name="BtnMsLogin" Content="用 Microsoft 账号登录" Click="OnMsLoginClick"
-                                Style="{StaticResource Primary}" Padding="14,6" />
-                        <TextBlock x:Name="LblMsCode" Text="" Style="{StaticResource Mono}"
-                                   VerticalAlignment="Center" Margin="12,0,0,0" />
-                      </StackPanel>
-                      <TextBlock x:Name="LblMsStatus" Text="" Style="{StaticResource Faint}"
-                                 TextWrapping="Wrap" Margin="0,8,0,0" />
-                    </StackPanel>
-                  </Border>
-
-                  <Border x:Name="PanelYggdrasil" Style="{StaticResource Card}" Visibility="Collapsed">
-                    <StackPanel>
-                      <TextBlock Text="API 地址" Style="{StaticResource Faint}" Margin="0,0,0,4" />
-                      <TextBox x:Name="TxtYggApi" Margin="0,0,0,8"
-                               Text="https://littleskin.cn/api/yggdrasil" />
-                      <TextBlock Text="用户名" Style="{StaticResource Faint}" Margin="0,0,0,4" />
-                      <TextBox x:Name="TxtYggUser" Margin="0,0,0,8" />
-                      <TextBlock Text="密码" Style="{StaticResource Faint}" Margin="0,0,0,4" />
-                      <PasswordBox x:Name="TxtYggPass" Margin="0,0,0,10" />
-                      <StackPanel Orientation="Horizontal">
-                        <Button x:Name="BtnYggLogin" Content="登录" Click="OnYggLoginClick"
-                                Style="{StaticResource Primary}" Padding="14,6" />
-                        <TextBlock x:Name="LblYggStatus" Text="" Style="{StaticResource Faint}"
-                                   VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" />
-                      </StackPanel>
-                      <TextBlock Text="外置登录会在启动时注入 authlib-injector（首次自动下载），皮肤与披风来自该服务器。"
-                                 Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,8,0,0" />
-                    </StackPanel>
-                  </Border>
-
-                  <Border x:Name="PanelOffline" Style="{StaticResource Card}">
-                    <StackPanel>
-                      <TextBlock Text="玩家名" Style="{StaticResource Faint}" Margin="0,0,0,4" />
-                      <TextBox x:Name="TxtOfflineName" Margin="0,0,0,10" MaxLength="16" Width="220"
-                               HorizontalAlignment="Left" />
-                      <StackPanel Orientation="Horizontal">
-                        <Button x:Name="BtnOfflineUse" Content="使用这个名字" Click="OnOfflineClick"
-                                Style="{StaticResource Primary}" Padding="14,6" />
-                        <TextBlock Text="服务器必须开了 offline-mode 才进得去"
-                                   Style="{StaticResource Faint}" VerticalAlignment="Center" Margin="12,0,0,0" />
-                      </StackPanel>
-                    </StackPanel>
-                  </Border>
-
-                  <TextBlock Text="已保存的账号" Style="{StaticResource SectionTitle}" Margin="0,18,0,6" />
-                  <Border Style="{StaticResource Card}" Padding="4">
-                    <ListBox x:Name="AccountList" Height="96" ItemContainerStyle="{StaticResource RowItem}">
-                      <ListBox.ItemTemplate>
-                        <DataTemplate>
-                          <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{Binding Summary}" />
-                            <TextBlock Text="{Binding Uuid}" Style="{StaticResource Mono}"
-                                       Foreground="{StaticResource TextFaint}" Margin="10,0,0,0" />
-                          </StackPanel>
-                        </DataTemplate>
-                      </ListBox.ItemTemplate>
-                    </ListBox>
-                  </Border>
-                  <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                    <Button Content="使用选中账号" Click="OnUseAccountClick"
-                            Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
-                            Background="{StaticResource Panel}" Margin="0,0,8,0" />
-                    <Button Content="删除" Click="OnDeleteAccountClick"
-                            Style="{StaticResource Danger}" BorderBrush="{StaticResource Border}"
-                            Background="{StaticResource Panel}" />
-                  </StackPanel>
-                </StackPanel>
-              </ScrollViewer>
-            </TabItem>
-
             <TabItem Header="日志">
               <Grid Margin="0,12,0,4">
                 <Grid.RowDefinitions>
@@ -433,7 +375,12 @@
                 </StackPanel>
               </Grid>
             </TabItem>
+              </TabControl>
+            </Grid>
+          </Grid>
 
+          <Grid x:Name="PaneDownload" Visibility="Collapsed">
+            <TabControl x:Name="DownloadTabs" Margin="18,10,18,4" SelectionChanged="OnTabChanged">
             <TabItem Header="下载">
               <Grid Margin="0,12,0,4">
                 <Grid.ColumnDefinitions>
@@ -448,7 +395,7 @@
                   </Grid.RowDefinitions>
                   <StackPanel Grid.Row="0" Margin="0,0,0,10">
                     <TextBlock x:Name="LblInstallHint"
-                               Text="选一个游戏版本，然后在右边创建全新客户端。新客户端有自己独立的目录、模组和存档，不会动到已有的客户端。"
+                               Text="选一个游戏版本，在右边选择加载器与名字，下载会装进游戏根目录，装完成为客户端列表里的一条。"
                                Style="{StaticResource Faint}" TextWrapping="Wrap" />
                     <DockPanel Margin="0,8,0,0">
                       <ComboBox x:Name="VerTypeCombo" Width="104" DockPanel.Dock="Left"
@@ -483,9 +430,9 @@
 
                 <Border Grid.Column="1" Style="{StaticResource Card}" VerticalAlignment="Top">
                   <StackPanel>
-                    <TextBlock Text="创建新客户端" Style="{StaticResource CardTitle}" />
+                    <TextBlock Text="下载并安装" Style="{StaticResource CardTitle}" />
 
-                    <TextBlock Text="客户端名称" Style="{StaticResource Faint}" Margin="0,0,0,4" />
+                    <TextBlock Text="客户端名称（加载器版本会用它命名）" Style="{StaticResource Faint}" Margin="0,0,0,4" />
                     <TextBox x:Name="NewNameBox" Margin="0,0,0,10" MaxLength="40" />
 
                     <TextBlock Text="装到游戏根目录" Style="{StaticResource Faint}" Margin="0,0,0,4" />
@@ -497,10 +444,10 @@
                     <TextBlock Text="模组加载器" Style="{StaticResource Faint}" Margin="0,0,0,4" />
                     <ComboBox x:Name="NewLoaderCombo" Margin="0,0,0,12" />
 
-                    <TextBlock Text="会在「安装位置\客户端名称」下建一个完整游戏目录：versions / libraries / assets / mods 全独立，装完自动切过去并打开文件夹。"
+                    <TextBlock Text="客户端会装进上面这个游戏根目录的 versions/，加载器版本以你起的名字命名；libraries 与 assets 全局共用，同一个版本不会重复下载。"
                                Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,0,0,12" />
 
-                    <Button x:Name="BtnCreate" Content="创建新客户端" Click="OnCreateInstanceClick"
+                    <Button x:Name="BtnCreate" Content="开始下载" Click="OnCreateInstanceClick"
                             Style="{StaticResource Primary}" HorizontalAlignment="Stretch" Padding="12,7" />
                     <ProgressBar x:Name="CreateBar" Margin="0,10,0,0" Visibility="Collapsed" />
                     <TextBlock x:Name="LblCreateStatus" Text="" Style="{StaticResource Faint}"
@@ -513,7 +460,6 @@
                 </Border>
               </Grid>
             </TabItem>
-
             <TabItem Header="模组">
               <Grid Margin="0,12,0,4">
                 <Grid.ColumnDefinitions>
@@ -638,8 +584,102 @@
                 </Border>
               </Grid>
             </TabItem>
+            </TabControl>
+          </Grid>
 
-            <TabItem Header="设置">
+          <Grid x:Name="PaneAccount" Visibility="Collapsed">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+                <StackPanel Margin="0,0,6,16" MaxWidth="760" HorizontalAlignment="Left">
+                  <TextBlock Text="当前账号" Style="{StaticResource SectionTitle}" />
+                  <TextBlock x:Name="ValAccountBig" Text="未登录" FontSize="15" Margin="0,0,0,3" />
+                  <TextBlock x:Name="ValAccountNote" Text="没有账号时只能用离线模式启动"
+                             Style="{StaticResource Faint}" Margin="0,0,0,14" />
+
+                  <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                    <RadioButton x:Name="RbMicrosoft" Content="微软正版" GroupName="login"
+                                 Checked="OnLoginModeChanged" />
+                    <RadioButton x:Name="RbYggdrasil" Content="外置登录" GroupName="login"
+                                 Checked="OnLoginModeChanged" />
+                    <RadioButton x:Name="RbOffline" Content="离线" GroupName="login" IsChecked="True"
+                                 Checked="OnLoginModeChanged" />
+                  </StackPanel>
+
+                  <Border x:Name="PanelMicrosoft" Style="{StaticResource Card}" Visibility="Collapsed">
+                    <StackPanel>
+                      <TextBlock Text="用正版账号登录后，进正版服、皮肤、Realms 都正常。登录一次长期有效，过期会自动续期。"
+                                 Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,0,0,10" />
+                      <StackPanel Orientation="Horizontal">
+                        <Button x:Name="BtnMsLogin" Content="用 Microsoft 账号登录" Click="OnMsLoginClick"
+                                Style="{StaticResource Primary}" Padding="14,6" />
+                        <TextBlock x:Name="LblMsCode" Text="" Style="{StaticResource Mono}"
+                                   VerticalAlignment="Center" Margin="12,0,0,0" />
+                      </StackPanel>
+                      <TextBlock x:Name="LblMsStatus" Text="" Style="{StaticResource Faint}"
+                                 TextWrapping="Wrap" Margin="0,8,0,0" />
+                    </StackPanel>
+                  </Border>
+
+                  <Border x:Name="PanelYggdrasil" Style="{StaticResource Card}" Visibility="Collapsed">
+                    <StackPanel>
+                      <TextBlock Text="API 地址" Style="{StaticResource Faint}" Margin="0,0,0,4" />
+                      <TextBox x:Name="TxtYggApi" Margin="0,0,0,8"
+                               Text="https://littleskin.cn/api/yggdrasil" />
+                      <TextBlock Text="用户名" Style="{StaticResource Faint}" Margin="0,0,0,4" />
+                      <TextBox x:Name="TxtYggUser" Margin="0,0,0,8" />
+                      <TextBlock Text="密码" Style="{StaticResource Faint}" Margin="0,0,0,4" />
+                      <PasswordBox x:Name="TxtYggPass" Margin="0,0,0,10" />
+                      <StackPanel Orientation="Horizontal">
+                        <Button x:Name="BtnYggLogin" Content="登录" Click="OnYggLoginClick"
+                                Style="{StaticResource Primary}" Padding="14,6" />
+                        <TextBlock x:Name="LblYggStatus" Text="" Style="{StaticResource Faint}"
+                                   VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" />
+                      </StackPanel>
+                      <TextBlock Text="外置登录会在启动时注入 authlib-injector（首次自动下载），皮肤与披风来自该服务器。"
+                                 Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                    </StackPanel>
+                  </Border>
+
+                  <Border x:Name="PanelOffline" Style="{StaticResource Card}">
+                    <StackPanel>
+                      <TextBlock Text="玩家名" Style="{StaticResource Faint}" Margin="0,0,0,4" />
+                      <TextBox x:Name="TxtOfflineName" Margin="0,0,0,10" MaxLength="16" Width="220"
+                               HorizontalAlignment="Left" />
+                      <StackPanel Orientation="Horizontal">
+                        <Button x:Name="BtnOfflineUse" Content="使用这个名字" Click="OnOfflineClick"
+                                Style="{StaticResource Primary}" Padding="14,6" />
+                        <TextBlock Text="服务器必须开了 offline-mode 才进得去"
+                                   Style="{StaticResource Faint}" VerticalAlignment="Center" Margin="12,0,0,0" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+
+                  <TextBlock Text="已保存的账号" Style="{StaticResource SectionTitle}" Margin="0,18,0,6" />
+                  <Border Style="{StaticResource Card}" Padding="4">
+                    <ListBox x:Name="AccountList" Height="96" ItemContainerStyle="{StaticResource RowItem}">
+                      <ListBox.ItemTemplate>
+                        <DataTemplate>
+                          <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Summary}" />
+                            <TextBlock Text="{Binding Uuid}" Style="{StaticResource Mono}"
+                                       Foreground="{StaticResource TextFaint}" Margin="10,0,0,0" />
+                          </StackPanel>
+                        </DataTemplate>
+                      </ListBox.ItemTemplate>
+                    </ListBox>
+                  </Border>
+                  <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <Button Content="使用选中账号" Click="OnUseAccountClick"
+                            Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
+                            Background="{StaticResource Panel}" Margin="0,0,8,0" />
+                    <Button Content="删除" Click="OnDeleteAccountClick"
+                            Style="{StaticResource Danger}" BorderBrush="{StaticResource Border}"
+                            Background="{StaticResource Panel}" />
+                  </StackPanel>
+                </StackPanel>
+              </ScrollViewer>
+          </Grid>
+
+          <Grid x:Name="PaneSettings" Visibility="Collapsed">
               <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
                 <Grid Margin="0,0,6,16">
                   <Grid.ColumnDefinitions>
@@ -797,8 +837,7 @@
                   </StackPanel>
                 </Grid>
               </ScrollViewer>
-            </TabItem>
-          </TabControl>
+          </Grid>
         </Grid>
       </Grid>
 

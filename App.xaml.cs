@@ -10,6 +10,10 @@ public partial class App : Application
     /// <summary>--selftest：不开界面，跑一遍加载器与模组接口，结果写到临时文件（便于离线核对）。</summary>
     protected override async void OnStartup(StartupEventArgs e)
     {
+        // 任何自检模式都不许写用户真实配置（之前踩过这个坑）
+        if (e.Args.Any(a => a.StartsWith("--selftest", StringComparison.OrdinalIgnoreCase)))
+            AppConfig.SuppressSave = true;
+
         // 发布用：--mkpatch <旧exe> <新exe> <输出补丁> 生成增量补丁，不显示界面
         // 注意：StartupEventArgs.Args 不含 exe 路径，--mkpatch 的下标是 0
         var patchIdx = Array.IndexOf(e.Args, "--mkpatch");
@@ -109,6 +113,20 @@ public partial class App : Application
                          && !Directory.Exists(a) && !Directory.Exists(b)
                          && File.Exists(Path.Combine(rootDir, "versions", "fabric-loader-0.19.3-1.21.1", "mods", "sodium.jar"))
                          && File.Exists(Path.Combine(rootDir, "versions", "1.20.6", "saves", "world1", "level.dat"));
+                // 改名逻辑：加载器版本目录改成客户端名字，json 里的 id 也要跟着变
+                var renamed = ClientCreator.RenameVersionDir(rootDir, "fabric-loader-0.19.3-1.21.1", "我的客户端",
+                    "Fabric", "1.21.1");
+                var renamedJson = Path.Combine(rootDir, "versions", "我的客户端", "我的客户端.json");
+                var renamedId = "";
+                if (File.Exists(renamedJson))
+                {
+                    var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(renamedJson));
+                    renamedId = node?["id"]?.ToString() ?? "";
+                }
+                sb.AppendLine("改名结果 = " + (renamed ?? "null") + "  json.id = " + renamedId +
+                              "  目录存在 = " + Directory.Exists(Path.Combine(rootDir, "versions", "我的客户端")));
+                ok = ok && renamed == "我的客户端" && renamedId == "我的客户端";
+
                 sb.AppendLine(ok ? "MIGRATE PASS" : "MIGRATE FAIL");
             }
             catch (Exception ex)
@@ -218,7 +236,6 @@ public partial class App : Application
         {
             var sb = new StringBuilder();
             var cfg = AppConfig.Load();
-            AppConfig.SuppressSave = true;   // 自检不写用户配置
             // 自检用独立根目录，别碰用户真实的 .minecraft
             cfg.GameDir = Environment.GetEnvironmentVariable("MINELIB_NEW_DIR")
                           ?? Path.Combine(Path.GetTempPath(), "minelib-root-" + Guid.NewGuid().ToString("N")[..6]);

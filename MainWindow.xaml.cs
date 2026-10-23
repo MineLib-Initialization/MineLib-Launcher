@@ -127,7 +127,7 @@ public partial class MainWindow : Window
         StateChanged += (_, _) => UpdateWindowChrome();
         // 调试：MINELIB_TAB=1/2/3 直接打开账号/日志/下载页，便于离屏核对
         if (int.TryParse(Environment.GetEnvironmentVariable("MINELIB_TAB"), out var startTab))
-            Tabs.SelectedIndex = Math.Clamp(startTab, 0, 5);
+            ApplyTabIndex(startTab);
         switch (Environment.GetEnvironmentVariable("MINELIB_ACCOUNT"))
         {
             case "ms": RbMicrosoft.IsChecked = true; break;
@@ -143,7 +143,7 @@ public partial class MainWindow : Window
             var outPath = shotArgs[shotIdx + 3];
             Loaded += async (_, _) =>
             {
-                Tabs.SelectedIndex = Math.Clamp(tabIdx, 0, 5);
+                ApplyTabIndex(tabIdx);
                 if (tabIdx == 4)
                 {
                     await Task.Delay(600);
@@ -247,7 +247,7 @@ public partial class MainWindow : Window
         _current = _view.FirstOrDefault(v => v.Id == keep) ?? _view[0];
         VersionList.SelectedItem = _current;
         ShowVersion(_current);
-        if (Tabs.SelectedIndex == 4) InitModTab();
+        if (DownloadTabs.SelectedIndex == 1) InitModTab();
     }
 
     private void ApplyFilter()
@@ -417,9 +417,9 @@ public partial class MainWindow : Window
         OpenFolder(_current.Dir);
     }
 
-    private void OnGoAccountClick(object sender, RoutedEventArgs e) => Tabs.SelectedIndex = 1;
+    private void OnGoAccountClick(object sender, RoutedEventArgs e) => ShowPane("account");
 
-    private void OnGoLogClick(object sender, RoutedEventArgs e) => Tabs.SelectedIndex = 2;
+    private void OnGoLogClick(object sender, RoutedEventArgs e) { ShowPane("client"); Tabs.SelectedIndex = 1; }
 
     private void OpenFolder(string path)
     {
@@ -446,6 +446,20 @@ public partial class MainWindow : Window
     }
 
     // ---------------------------------------------------------------- 设置页
+    /// <summary>兼容旧的页签编号：0 启动 / 1 账号 / 2 日志 / 3 下载 / 4 模组 / 5 设置。</summary>
+    private void ApplyTabIndex(int idx)
+    {
+        switch (Math.Clamp(idx, 0, 5))
+        {
+            case 1: ShowPane("account"); break;
+            case 2: ShowPane("client"); Tabs.SelectedIndex = 1; break;
+            case 3: ShowPane("download"); DownloadTabs.SelectedIndex = 0; break;
+            case 4: ShowPane("download"); DownloadTabs.SelectedIndex = 1; break;
+            case 5: ShowPane("settings"); break;
+            default: ShowPane("client"); Tabs.SelectedIndex = 0; break;
+        }
+    }
+
     private void ApplyWindowTitle()
     {
         var t = string.IsNullOrWhiteSpace(_cfg.WindowTitle) ? "MineLib 启动器" : _cfg.WindowTitle.Trim();
@@ -560,7 +574,7 @@ public partial class MainWindow : Window
         var account = _cfg.CurrentAccount;
         if (account is null)
         {
-            Tabs.SelectedIndex = 1;
+            ShowPane("account");
             SetStatus("还没有账号。在「账号」页选一种登录方式后再启动。", false);
             return;
         }
@@ -631,7 +645,8 @@ public partial class MainWindow : Window
                 BtnLaunch.IsEnabled = true;
                 BtnStop.Visibility = Visibility.Collapsed;
                 SetStatus(code == 0 ? "游戏已退出" : "游戏异常退出，退出码 " + code, false);
-                Tabs.SelectedIndex = 2;
+                ShowPane("client");
+                Tabs.SelectedIndex = 1;
             });
             _proc.Start(_javaExe, args, runDir, _logPath);
 
@@ -646,7 +661,8 @@ public partial class MainWindow : Window
         {
             SetStatus(ex.Message, false);
             AppendLog("启动失败：" + ex.Message);
-            Tabs.SelectedIndex = 2;
+            ShowPane("client");
+            Tabs.SelectedIndex = 1;
         }
         finally
         {
@@ -986,7 +1002,7 @@ public partial class MainWindow : Window
     /// <summary>新建客户端：切到下载页，装进当前游戏根目录。</summary>
     private void OnNewInstanceClick(object sender, RoutedEventArgs e)
     {
-        Tabs.SelectedIndex = 3;
+        ShowPane("download");
         SetStatus("在右边填名字、选版本和加载器，点「创建新客户端」——会装进 " + _cfg.GameDir, false);
     }
 
@@ -1203,12 +1219,88 @@ public partial class MainWindow : Window
         }
     }
 
+    // ---------------------------------------------------------------- 全局页签
+    private string _pane = "client";
+
+    private void OnGlobalTabClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is string id) ShowPane(id);
+    }
+
+    private void ShowPane(string id)
+    {
+        _pane = id;
+        var pane = id switch
+        {
+            "download" => (FrameworkElement)PaneDownload,
+            "account" => PaneAccount,
+            "settings" => PaneSettings,
+            _ => PaneClient
+        };
+        var button = id switch
+        {
+            "download" => BtnTabDownload,
+            "account" => BtnTabAccount,
+            "settings" => BtnTabSettings,
+            _ => BtnTabClient
+        };
+
+        foreach (var p in new FrameworkElement[] { PaneClient, PaneDownload, PaneAccount, PaneSettings })
+            if (!ReferenceEquals(p, pane)) p.Visibility = Visibility.Collapsed;
+
+        pane.Visibility = Visibility.Visible;
+        AnimateIn(pane);
+        AnimateIndicator(button);
+
+        foreach (var b in new[] { BtnTabClient, BtnTabDownload, BtnTabAccount, BtnTabSettings })
+            b.Tag = ReferenceEquals(b, button) ? "active" : "";
+
+        if (id == "download" && _official.Count == 0) _ = LoadOfficialAsync();
+    }
+
+    /// <summary>页面切换：淡入 + 轻推，Material 风格的那种过渡。</summary>
+    private static void AnimateIn(FrameworkElement pane)
+    {
+        // 基准值先设成动画的终点：即使动画没跑（比如离屏渲染），界面也是最终状态，不会停在透明
+        pane.Opacity = 1;
+        var shift = new System.Windows.Media.TranslateTransform(0, 0);
+        pane.RenderTransform = shift;
+        var ease = new System.Windows.Media.Animation.CubicEase
+        {
+            EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut
+        };
+        pane.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1,
+            TimeSpan.FromMilliseconds(190)) { EasingFunction = ease, FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop });
+        shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(14, 0, TimeSpan.FromMilliseconds(240))
+            { EasingFunction = ease, FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop });
+    }
+
+    /// <summary>底部指示条滑到选中的页签下面。</summary>
+    private void AnimateIndicator(FrameworkElement target)
+    {
+        try
+        {
+            var to = target.TransformToAncestor(TabStripRoot).Transform(new Point(0, 0)).X;
+            TabIndicator.Width = target.ActualWidth;
+            var ease = new System.Windows.Media.Animation.CubicEase
+            {
+                EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut
+            };
+            TabIndicatorShift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(to, TimeSpan.FromMilliseconds(240))
+                { EasingFunction = ease });
+        }
+        catch (Exception) { }
+    }
+
     private async void OnTabChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!ReferenceEquals(e.OriginalSource, Tabs)) return;
-        if (Tabs.SelectedIndex == 3 && _official.Count == 0)
-            await LoadOfficialAsync();
-        if (Tabs.SelectedIndex == 4) InitModTab();
+        if (ReferenceEquals(e.OriginalSource, DownloadTabs))
+        {
+            if (DownloadTabs.SelectedIndex == 0 && _official.Count == 0) await LoadOfficialAsync();
+            if (DownloadTabs.SelectedIndex == 1) InitModTab();
+        }
     }
 
     private async Task LoadOfficialAsync()
@@ -1348,7 +1440,7 @@ public partial class MainWindow : Window
         LblVerCount.Text = "共 " + view.Count + " 个";
     }
 
-    private void OnInstallClick(object sender, RoutedEventArgs e) => Tabs.SelectedIndex = 3;
+    private void OnInstallClick(object sender, RoutedEventArgs e) => ShowPane("download");
 
     private void OnCancelClick(object sender, RoutedEventArgs e)
     {
