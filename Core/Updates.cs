@@ -72,7 +72,15 @@ public static class Updates
     public static async Task<string> StageAsync(UpdateInfo info, IProgress<InstallProgress>? progress,
         Action<string>? log, CancellationToken ct)
     {
-        Directory.CreateDirectory(StageDir);
+        try
+        {
+            Directory.CreateDirectory(StageDir);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "启动器所在目录不可写，没法自动更新（" + AppContext.BaseDirectory + "）：" + ex.Message);
+        }
         var zipPath = Path.Combine(StageDir, "update.zip");
 
         // 先试增量：本地 exe + 小补丁，通常只有几 MB，比整包快一个数量级
@@ -156,11 +164,17 @@ public static class Updates
             if (entry is null) throw new InvalidOperationException("更新包里没有 MineLibLauncher.exe");
             entry.ExtractToFile(StagedExe, true);
         }
-        File.Delete(zipPath);
+        TryDelete(zipPath);
         WriteApplyScript();
 
         WriteNotes(info);
         return StagedExe;
+    }
+
+    /// <summary>删文件不抛异常（临时文件被占用不该让整个更新失败）。</summary>
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch (Exception) { }
     }
 
     /// <summary>把这次的更新说明留在暂存目录，新版本启动后取出来告知用户。</summary>
@@ -174,22 +188,46 @@ public static class Updates
         }.ToJsonString());
     }
 
-    private static void WriteApplyScript()
+    private static void WriteApplyScript() =>
+        WriteApplyScriptFor(StageDir, Path.Combine(AppContext.BaseDirectory, "MineLibLauncher.exe"));
+
+    /// <summary>生成替换脚本。抽出来是为了能被自检直接调用（含成功与失败两种路径）。</summary>
+    internal static void WriteApplyScriptFor(string stageDir, string exe, bool relaunch = true)
     {
-        var exe = Path.Combine(AppContext.BaseDirectory, "MineLibLauncher.exe");
-        var script = Path.Combine(StageDir, "apply-update.cmd");
+        var script = Path.Combine(stageDir, "apply-update.cmd");
+        // 等的应该是「占用目标 exe 的那个进程」，按目标文件名来，别写死
+        var imageName = Path.GetFileNameWithoutExtension(exe);
+        // 注意：只有复制成功才删除暂存 exe；否则保留现场并留一份失败说明，
+        // 用户下次启动还能重试，不会出现"更新包没了、程序也没换成"的静默失败。
         var lines = new[]
         {
             "@echo off",
-            "setlocal",
+            "setlocal enabledelayedexpansion",
+            "set \"TRIES=0\"",
             ":wait",
-            "tasklist /fi \"imagename eq MineLibLauncher.exe\" 2>nul | find /i \"MineLibLauncher.exe\" >nul",
-            "if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto wait)",
-            "copy /y \"%~dp0MineLibLauncher.exe\" \"" + exe + "\" >nul",
-            "del /q \"%~dp0MineLibLauncher.exe\"",
-            "start \"\" \"" + exe + "\"",
+            "tasklist /fi \"imagename eq " + imageName + ".exe\" 2>nul | find /i \"" + imageName + ".exe\" >nul",
+            "if errorlevel 1 goto copy",
+            "set /a TRIES+=1",
+            "if !TRIES! GEQ 120 goto timeout",
+            "timeout /t 1 /nobreak >nul",
+            "goto wait",
+            ":timeout",
+            ">\"%~dp0apply-failed.txt\" echo 等待启动器退出超时，未替换。暂存文件已保留，可稍后重启再试。",
             "del /q \"%~f0\"",
+            "exit /b 1",
+            ":copy",
+            "copy /y \"%~dp0MineLibLauncher.exe\" \"" + exe + "\" >nul 2>nul",
+            "if errorlevel 1 goto copyfail",
+            "del /q \"%~dp0MineLibLauncher.exe\"",
+            relaunch ? "start \"\" \"" + exe + "\"" : "rem 自检模式不重启",
+            "del /q \"%~f0\"",
+            "exit /b 0",
+            ":copyfail",
+            ">\"%~dp0apply-failed.txt\" echo 复制新版本失败（文件被占用或无权限），暂存文件已保留。",
+            "del /q \"%~f0\"",
+            "exit /b 2",
         };
+        Directory.CreateDirectory(stageDir);
         File.WriteAllText(script, string.Join("\r\n", lines) + "\r\n");
     }
 
@@ -222,7 +260,14 @@ public static class Updates
     public static bool TryApplyStagedAndExit()
     {
         var script = Path.Combine(StageDir, "apply-update.cmd");
-        if (!File.Exists(StagedExe) || !File.Exists(script)) return false;
+        if (!File.Exists(StagedExe)) return false;
+        if (!File.Exists(script))
+        {
+            // 脚本没了（被手动删/被杀软删），暂存的 exe 也就没用了
+            TryDelete(StagedExe);
+            TryDelete(Path.Combine(StageDir, "pending-notes.json"));
+            return false;
+        }
         try
         {
             Process.Start(new ProcessStartInfo("cmd.exe", "/c \"" + script + "\"")

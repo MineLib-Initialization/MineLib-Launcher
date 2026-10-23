@@ -47,6 +47,75 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 更新替换脚本自检：验证「成功替换」与「复制失败时保留暂存」两条路径
+        if (e.Args.Contains("--selftest-update"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-upd-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                var stage = Path.Combine(work, "stage");
+                var target = Path.Combine(work, "target");
+                Directory.CreateDirectory(stage);
+                Directory.CreateDirectory(target);
+                // 目标故意换个名字：自检进程本身就占用 MineLibLauncher.exe，
+                // 用同名会让脚本一直等自己退出（这也是脚本按目标文件名等待的意义）
+                var exe = Path.Combine(target, "Target.exe");
+                File.WriteAllText(exe, "OLD");
+                File.WriteAllText(Path.Combine(stage, "MineLibLauncher.exe"), "NEW");
+                Updates.WriteApplyScriptFor(stage, exe, relaunch: false);
+
+                void RunScript()
+                {
+                    var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe",
+                        "/c \"" + Path.Combine(stage, "apply-update.cmd") + "\"")
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WorkingDirectory = stage
+                    };
+                    using var proc = System.Diagnostics.Process.Start(psi);
+                    proc!.WaitForExit(60000);
+                }
+
+                RunScript();
+                Thread.Sleep(600);
+                var content = File.ReadAllText(exe);
+                var c1 = content == "NEW";
+                var c2 = !File.Exists(Path.Combine(stage, "apply-update.cmd"));
+                var c3 = !File.Exists(Path.Combine(stage, "MineLibLauncher.exe"));
+                var c4 = !File.Exists(Path.Combine(stage, "apply-failed.txt"));
+                var ok1 = c1 && c2 && c3 && c4;
+                sb.AppendLine("成功替换 = " + ok1 + "（内容新=" + c1 + " 脚本已删=" + c2 +
+                              " 暂存已删=" + c3 + " 无失败标记=" + c4 + "）");
+
+                // 目标被占用：复制应失败，暂存 exe 与失败标记保留
+                File.WriteAllText(Path.Combine(stage, "MineLibLauncher.exe"), "NEW2");
+                Updates.WriteApplyScriptFor(stage, exe, relaunch: false);
+                using (var hold = new FileStream(exe, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    RunScript();
+                }
+                Thread.Sleep(600);
+                var ok2 = File.Exists(Path.Combine(stage, "MineLibLauncher.exe"))
+                          && File.Exists(Path.Combine(stage, "apply-failed.txt"));
+                sb.AppendLine("占用时保留暂存 = " + ok2 +
+                              "（暂存=" + File.Exists(Path.Combine(stage, "MineLibLauncher.exe")) +
+                              " 失败标记=" + File.Exists(Path.Combine(stage, "apply-failed.txt")) + "）");
+                sb.AppendLine(ok1 && ok2 ? "UPDATE SCRIPT PASS" : "UPDATE SCRIPT FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("UPDATE SCRIPT FAIL " + ex);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-update.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // 迁移自检：造一份旧版（一个客户端一个目录）的假数据，验证合并成单根目录
         if (e.Args.Contains("--selftest-migrate"))
         {

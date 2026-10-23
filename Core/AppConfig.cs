@@ -90,8 +90,7 @@ public sealed class AppConfig
         get
         {
             Roots ??= new List<RootEntry>();
-            var hit = Roots.FirstOrDefault(r =>
-                string.Equals(r.Path, GameDir, StringComparison.OrdinalIgnoreCase));
+            var hit = Roots.FirstOrDefault(r => SamePath(r.Path, GameDir));
             if (hit is not null)
             {
                 hit.Clients ??= new List<ClientEntry>();
@@ -100,6 +99,53 @@ public sealed class AppConfig
             hit = new RootEntry { Name = RootName(GameDir), Path = GameDir, Clients = new List<ClientEntry>() };
             Roots.Add(hit);
             return hit;
+        }
+    }
+
+    /// <summary>比较路径用：去掉尾部反斜杠、统一大小写不敏感比较。</summary>
+    public static string NormalizePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return "";
+        try { return Path.GetFullPath(path.Trim()).TrimEnd('\\'); }
+        catch (Exception) { return path.Trim().TrimEnd('\\'); }
+    }
+
+    private static bool SamePath(string a, string b) =>
+        string.Equals(NormalizePath(a), NormalizePath(b), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>清理客户端文件夹列表：去空、去重、路径归一。</summary>
+    private void NormalizeRoots()
+    {
+        Roots ??= new List<RootEntry>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var cleaned = new List<RootEntry>();
+        foreach (var r in Roots)
+        {
+            if (r is null) continue;
+            var p = NormalizePath(r.Path);
+            if (string.IsNullOrEmpty(p)) continue;
+            r.Path = p;
+            r.Clients ??= new List<ClientEntry>();
+            if (!seen.Add(p)) continue;      // 同一个目录只留一条
+            if (string.IsNullOrWhiteSpace(r.Name)) r.Name = RootName(p);
+            cleaned.Add(r);
+        }
+        Roots = cleaned;
+        GameDir = NormalizePath(GameDir);
+        if (string.IsNullOrEmpty(GameDir)) GameDir = Paths.DefaultGameRoot;
+    }
+
+    /// <summary>载入后的统一整理：旧字段迁移 + 根目录清理。任何返回路径都必须走一遍。</summary>
+    private void AfterLoad()
+    {
+        NormalizeRoots();
+        if (LegacyClients is { Count: > 0 })
+        {
+            var rootEntry = CurrentRoot;
+            foreach (var c in LegacyClients)
+                if (rootEntry.Clients.All(x => !string.Equals(x.VersionId, c.VersionId, StringComparison.OrdinalIgnoreCase)))
+                    rootEntry.Clients.Add(c);
+            LegacyClients = null;
         }
     }
 
@@ -122,7 +168,8 @@ public sealed class AppConfig
     public RootEntry RegisterRoot(string path, string? name = null)
     {
         Roots ??= new List<RootEntry>();
-        var hit = Roots.FirstOrDefault(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
+        path = NormalizePath(path);
+        var hit = Roots.FirstOrDefault(r => SamePath(r.Path, path));
         if (hit is null)
         {
             hit = new RootEntry { Name = string.IsNullOrWhiteSpace(name) ? RootName(path) : name!.Trim(), Path = path };
@@ -141,9 +188,14 @@ public sealed class AppConfig
     /// <summary>从列表里移除一个客户端文件夹（不删磁盘文件）。</summary>
     public void RemoveRoot(string path)
     {
-        Roots?.RemoveAll(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
-        if (string.Equals(GameDir, path, StringComparison.OrdinalIgnoreCase))
-            GameDir = Roots?.FirstOrDefault()?.Path ?? Paths.DefaultGameRoot;
+        path = NormalizePath(path);
+        // 先把当前根切走再删，否则 CurrentRoot 下次访问又会把这条加回来
+        if (SamePath(GameDir, path))
+        {
+            var next = Roots?.FirstOrDefault(r => !SamePath(r.Path, path))?.Path ?? Paths.DefaultGameRoot;
+            GameDir = next;
+        }
+        Roots?.RemoveAll(r => SamePath(r.Path, path));
         Save();
     }
 
@@ -173,15 +225,7 @@ public sealed class AppConfig
                     cfg.Accounts ??= new List<Account>();
                     cfg.Roots ??= new List<RootEntry>();
                     cfg.Instances ??= new List<InstanceRef>();
-                    // 单根目录时代的客户端列表，迁进它所属的客户端文件夹
-                    if (cfg.LegacyClients is { Count: > 0 })
-                    {
-                        var rootEntry = cfg.CurrentRoot;
-                        foreach (var c in cfg.LegacyClients)
-                            if (rootEntry.Clients.All(x => !string.Equals(x.VersionId, c.VersionId, StringComparison.OrdinalIgnoreCase)))
-                                rootEntry.Clients.Add(c);
-                        cfg.LegacyClients = null;
-                    }
+                    cfg.AfterLoad();
                     return cfg;
                 }
             }
@@ -200,21 +244,28 @@ public sealed class AppConfig
                         cfg.Accounts ??= new List<Account>();
                         cfg.Roots ??= new List<RootEntry>();
                         cfg.Instances ??= new List<InstanceRef>();
+                        cfg.AfterLoad();
                         return cfg;
                     }
                 }
             }
             catch (Exception) { }
         }
-        return new AppConfig();
+        var fresh = new AppConfig();
+        fresh.AfterLoad();
+        return fresh;
     }
 
     /// <summary>自检里别把临时配置写进用户真实配置。</summary>
     public static bool SuppressSave { get; set; }
 
+    private static readonly object SaveLock = new();
+
     public void Save()
     {
         if (SuppressSave) return;
+        lock (SaveLock)
+        {
         try
         {
             Directory.CreateDirectory(Dir);
@@ -230,6 +281,7 @@ public sealed class AppConfig
         }
         catch (Exception)
         {
+        }
         }
     }
 
