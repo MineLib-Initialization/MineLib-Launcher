@@ -10,6 +10,10 @@ public partial class App : Application
     /// <summary>--selftest：不开界面，跑一遍加载器与模组接口，结果写到临时文件（便于离线核对）。</summary>
     protected override async void OnStartup(StartupEventArgs e)
     {
+        // 任何自检模式都不许写用户真实配置（之前踩过这个坑）
+        if (e.Args.Any(a => a.StartsWith("--selftest", StringComparison.OrdinalIgnoreCase)))
+            AppConfig.SuppressSave = true;
+
         // 发布用：--mkpatch <旧exe> <新exe> <输出补丁> 生成增量补丁，不显示界面
         // 注意：StartupEventArgs.Args 不含 exe 路径，--mkpatch 的下标是 0
         var patchIdx = Array.IndexOf(e.Args, "--mkpatch");
@@ -40,6 +44,100 @@ public partial class App : Application
                 sb.AppendLine("MKPATCH FAIL " + ex.Message);
             }
             await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-patch.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
+        // 迁移自检：造一份旧版（一个客户端一个目录）的假数据，验证合并成单根目录
+        if (e.Args.Contains("--selftest-migrate"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-mig-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                var rootDir = Path.Combine(work, "root");
+                var a = Path.Combine(work, "client-a");
+                var b = Path.Combine(work, "client-b");
+                void FakeVersion(string dir, string id, string? inherits)
+                {
+                    var vdir = Path.Combine(dir, "versions", id);
+                    Directory.CreateDirectory(vdir);
+                    var json = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["id"] = id,
+                        ["type"] = "release",
+                        ["releaseTime"] = "2026-01-01T00:00:00+00:00",
+                        ["mainClass"] = "net.minecraft.client.main.Main"
+                    };
+                    if (inherits is not null) json["inheritsFrom"] = inherits;
+                    File.WriteAllText(Path.Combine(vdir, id + ".json"), json.ToJsonString());
+                }
+                void FakeFile(string path, string content)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    File.WriteAllText(path, content);
+                }
+
+                FakeVersion(a, "1.21.1", null);
+                FakeVersion(a, "fabric-loader-0.19.3-1.21.1", "1.21.1");
+                FakeFile(Path.Combine(a, "libraries", "org", "x", "x.jar"), "lib-a");
+                FakeFile(Path.Combine(a, "assets", "objects", "ab", "abcdef"), "asset-a");
+                FakeFile(Path.Combine(a, "mods", "sodium.jar"), "mod-a");
+                FakeFile(Path.Combine(a, "options.txt"), "fov:90");
+
+                FakeVersion(b, "1.20.6", null);
+                FakeFile(Path.Combine(b, "libraries", "org", "y", "y.jar"), "lib-b");
+                FakeFile(Path.Combine(b, "libraries", "org", "x", "x.jar"), "lib-a");
+                FakeFile(Path.Combine(b, "saves", "world1", "level.dat"), "save");
+
+                var cfg = new AppConfig { GameDir = rootDir, SingleRootMigrated = false };
+                cfg.Instances.Add(new InstanceRef { Name = "旧客户端A", Dir = a });
+                cfg.Instances.Add(new InstanceRef { Name = "旧客户端B", Dir = b });
+
+                var report = Workspace.EnsureSingleRoot(cfg, line => sb.AppendLine("  " + line));
+                sb.AppendLine("changed = " + report.Changed);
+                var versions = Directory.GetDirectories(Path.Combine(rootDir, "versions")).Select(Path.GetFileName).OrderBy(x => x).ToList();
+                sb.AppendLine("versions/ = " + string.Join(" | ", versions));
+                sb.AppendLine("客户端 = " + string.Join(" | ", cfg.Clients.Select(c => c.VersionId + "(" + c.Name + ")")));
+                sb.AppendLine("libraries 数 = " + Directory.GetFileSystemEntries(Path.Combine(rootDir, "libraries"), "*", SearchOption.AllDirectories).Count(x => File.Exists(x)));
+                sb.AppendLine("assets 数 = " + Directory.GetFileSystemEntries(Path.Combine(rootDir, "assets"), "*", SearchOption.AllDirectories).Count(x => File.Exists(x)));
+                sb.AppendLine("旧目录 A 还在 = " + Directory.Exists(a) + "  B 还在 = " + Directory.Exists(b));
+                if (Directory.Exists(b))
+                    sb.AppendLine("B 残留 = " + string.Join(" | ",
+                        Directory.EnumerateFiles(b, "*", SearchOption.AllDirectories).Select(x => x.Replace(b, ""))));
+
+                // 断言
+                var ok = versions.Count == 3
+                         && cfg.Clients.Any(c => c.VersionId == "fabric-loader-0.19.3-1.21.1")
+                         && cfg.Clients.Any(c => c.VersionId == "1.20.6")
+                         && cfg.Clients.All(c => c.VersionId != "1.21.1")
+                         && !Directory.Exists(a) && !Directory.Exists(b)
+                         && File.Exists(Path.Combine(rootDir, "versions", "fabric-loader-0.19.3-1.21.1", "mods", "sodium.jar"))
+                         && File.Exists(Path.Combine(rootDir, "versions", "1.20.6", "saves", "world1", "level.dat"));
+                // 改名逻辑：加载器版本目录改成客户端名字，json 里的 id 也要跟着变
+                var renamed = ClientCreator.RenameVersionDir(rootDir, "fabric-loader-0.19.3-1.21.1", "我的客户端",
+                    "Fabric", "1.21.1");
+                var renamedJson = Path.Combine(rootDir, "versions", "我的客户端", "我的客户端.json");
+                var renamedId = "";
+                if (File.Exists(renamedJson))
+                {
+                    var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(renamedJson));
+                    renamedId = node?["id"]?.ToString() ?? "";
+                }
+                sb.AppendLine("改名结果 = " + (renamed ?? "null") + "  json.id = " + renamedId +
+                              "  目录存在 = " + Directory.Exists(Path.Combine(rootDir, "versions", "我的客户端")));
+                ok = ok && renamed == "我的客户端" && renamedId == "我的客户端";
+
+                sb.AppendLine(ok ? "MIGRATE PASS" : "MIGRATE FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("MIGRATE FAIL " + ex);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-migrate.txt"), sb.ToString());
             Shutdown();
             return;
         }
@@ -138,8 +236,10 @@ public partial class App : Application
         {
             var sb = new StringBuilder();
             var cfg = AppConfig.Load();
-            var parent = Environment.GetEnvironmentVariable("MINELIB_NEW_DIR")
-                         ?? Path.Combine(Path.GetTempPath(), "minelib-clients");
+            // 自检用独立根目录，别碰用户真实的 .minecraft
+            cfg.GameDir = Environment.GetEnvironmentVariable("MINELIB_NEW_DIR")
+                          ?? Path.Combine(Path.GetTempPath(), "minelib-root-" + Guid.NewGuid().ToString("N")[..6]);
+            cfg.Clients.Clear();
             var name = Environment.GetEnvironmentVariable("MINELIB_NEW_NAME") ?? "测试新客户端";
             var mc = Environment.GetEnvironmentVariable("MINELIB_NEW_MC") ?? "1.7.10";
             var loader = Environment.GetEnvironmentVariable("MINELIB_NEW_LOADER") ?? "不装（纯原版）";
@@ -147,30 +247,33 @@ public partial class App : Application
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 var progress = new Progress<InstallProgress>(p => { if (p.Fraction is > 0 and < 1) sb.AppendLine("  " + p.Stage); });
-                var result = await ClientCreator.CreateAsync(cfg, parent, name, mc, loader, 16, "", progress,
+                var result = await ClientCreator.CreateAsync(cfg, name, mc, loader, 16, "", progress,
                     line => sb.AppendLine("  log: " + line), CancellationToken.None);
                 sw.Stop();
-                sb.AppendLine($"创建成功 dir={result.Dir} version={result.VersionId} note={result.Note} 用时={sw.Elapsed.TotalSeconds:0}s");
-                sb.AppendLine("磁盘占用 = " + Math.Round(new DirectoryInfo(result.Dir)
-                    .EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length) / 1048576.0, 1) + " MB");
+                sb.AppendLine($"创建成功 root={cfg.GameDir} version={result.VersionId} note={result.Note} 用时={sw.Elapsed.TotalSeconds:0}s");
+                sb.AppendLine("客户端列表 = " + string.Join(" | ", cfg.Clients.Select(c => c.Display)));
+                sb.AppendLine("versions/ = " + string.Join(" | ", Directory.GetDirectories(Path.Combine(cfg.GameDir, "versions")).Select(Path.GetFileName)));
+                var diskMb = new DirectoryInfo(cfg.GameDir)
+                    .EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length) / 1048576.0;
+                sb.AppendLine("磁盘占用 = " + Math.Round(diskMb, 1) + " MB");
 
-                var scanned = Versions.Scan(result.Dir);
+                var scanned = Versions.Scan(cfg.GameDir);
                 sb.AppendLine("版本扫描 = " + string.Join(" | ", scanned.Select(v => v.Id + "(" + v.Subtitle + ")")));
 
-                var merged = Versions.Resolve(result.Dir, result.VersionId);
-                var javaInfo = JavaFinder.Find("", result.Dir, merged["javaVersion"]?["majorVersion"]?.GetValue<int>() ?? 21);
+                var merged = Versions.Resolve(cfg.GameDir, result.VersionId);
+                var javaInfo = JavaFinder.Find("", cfg.GameDir, merged["javaVersion"]?["majorVersion"]?.GetValue<int>() ?? 21);
                 sb.AppendLine("java = " + javaInfo.exe + "  " + javaInfo.note);
                 var acct = OfflineAuth.Create("Tester");
-                await GameLauncher.PrepareAsync(result.Dir, result.VersionId, merged, 16, null, CancellationToken.None);
-                var (args, _) = GameLauncher.BuildCommand(result.Dir, result.VersionId, merged, acct,
-                    javaInfo.exe, 2048, "", result.Dir);
+                await GameLauncher.PrepareAsync(cfg.GameDir, result.VersionId, merged, 16, null, CancellationToken.None);
+                var (args, _) = GameLauncher.BuildCommand(cfg.GameDir, result.VersionId, merged, acct,
+                    javaInfo.exe, 2048, "", cfg.GameDir);
 
                 var proc = new GameProcess();
                 var lines = new List<string>();
                 var exited = new TaskCompletionSource<int>();
                 proc.LineReceived += line => { lock (lines) { if (lines.Count < 200) lines.Add(line); } };
                 proc.Exited += code => exited.TrySetResult(code);
-                proc.Start(javaInfo.exe, args, result.Dir, Path.Combine(result.Dir, "logs", "create-test.log"));
+                proc.Start(javaInfo.exe, args, cfg.GameDir, Path.Combine(cfg.GameDir, "logs", "create-test.log"));
                 var done = await Task.WhenAny(exited.Task, Task.Delay(35000));
                 var early = done == exited.Task;
                 if (!early) proc.Stop();

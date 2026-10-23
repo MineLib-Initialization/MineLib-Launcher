@@ -460,6 +460,37 @@
     </Setter>
   </Style>
 
+  <!-- ══ 全局页签按钮（Material 风格：无边框、选中变强调色） ══ -->
+  <Style x:Key="TabButton" TargetType="Button">
+    <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+    <Setter Property="FontSize" Value="13.5" />
+    <Setter Property="Foreground" Value="{StaticResource TextDim}" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="16,12" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="bd" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"
+                  CornerRadius="5" Margin="2,6">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Hover}" />
+              <Setter Property="Foreground" Value="{StaticResource Text}" />
+            </Trigger>
+            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="active">
+              <Setter Property="Foreground" Value="{StaticResource Accent}" />
+              <Setter Property="FontWeight" Value="SemiBold" />
+            </DataTrigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- ══ 页签 ══ -->
   <Style TargetType="TabItem">
     <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
