@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 namespace MineLib.Core;
 
-public sealed class ModHit
+public sealed class ModHit : System.ComponentModel.INotifyPropertyChanged
 {
     public string ProjectId { get; init; } = "";
     public string Slug { get; init; } = "";
@@ -22,8 +22,43 @@ public sealed class ModHit
 
     public string Meta => string.Join(" · ", new[] { License, Categories }.Where(s => !string.IsNullOrEmpty(s)));
 
-    /// <summary>图标：按 URL 缓存已解码的缩略图（列表翻页时不再重复请求/解码大图）。</summary>
-    public System.Windows.Media.ImageSource? Icon => ModIconCache.Get(IconUrl, Title);
+    private System.Windows.Media.ImageSource? _icon;
+    private bool _iconAsked;
+
+    /// <summary>
+    /// 图标：拿得到就返回，拿不到就返回 null 并起一个后台任务去取，取到了再通知界面刷新。
+    /// 这样列表先出文字，不卡滚动。
+    /// </summary>
+    public System.Windows.Media.ImageSource? Icon
+    {
+        get
+        {
+            if (_icon is not null) return _icon;
+            var cached = ModIconCache.TryGet(IconUrl);
+            if (cached is not null) { _icon = cached; return cached; }
+            if (!_iconAsked && !string.IsNullOrEmpty(IconUrl))
+            {
+                _iconAsked = true;
+                _ = LoadIconAsync();
+            }
+            return null;
+        }
+    }
+
+    private async Task LoadIconAsync()
+    {
+        var img = await ModIconCache.LoadAsync(IconUrl).ConfigureAwait(false);
+        if (img is null) return;
+        var app = System.Windows.Application.Current;
+        if (app is null) { _icon = img; return; }
+        await app.Dispatcher.InvokeAsync(() =>
+        {
+            _icon = img;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Icon)));
+        });
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 }
 
 public sealed class ModFile
@@ -45,88 +80,90 @@ internal static class ModIconCache
 {
     private static readonly Dictionary<string, System.Windows.Media.ImageSource?> Cache =
         new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> Loading =
+        new(StringComparer.OrdinalIgnoreCase);
     private static readonly object Lock = new();
     private const int MaxEntries = 400;
 
-    public static System.Windows.Media.ImageSource? Get(string url, string title = "")
+    /// <summary>最近一次加载失败的原因（自检与日志用）。</summary>
+    internal static string? LastError { get; private set; }
+
+    public static System.Windows.Media.ImageSource? TryGet(string url)
     {
-        var key = string.IsNullOrWhiteSpace(url) ? "#" + title : url;
+        if (string.IsNullOrWhiteSpace(url)) return null;
         lock (Lock)
         {
-            if (Cache.TryGetValue(key, out var hit)) return hit;
+            return Cache.TryGetValue(url, out var hit) ? hit : null;
         }
-
-        System.Windows.Media.ImageSource? img = null;
-        if (!string.IsNullOrWhiteSpace(url))
-        {
-            try
-            {
-                var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                bmp.BeginInit();
-                bmp.UriSource = new Uri(url, UriKind.Absolute);
-                bmp.DecodePixelWidth = 64;                   // 只要缩略图，别解码原图
-                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bmp.EndInit();
-                bmp.Freeze();                                // 冻结后可跨线程复用
-                // Modrinth 现在大量给 WebP，部分系统上 WIC 解出来只有 1x1（等于空白）。
-                // 这种情况按下面的占位图处理，别在界面上留一个空格子。
-                img = bmp.PixelWidth > 1 && bmp.PixelHeight > 1 ? bmp : null;
-            }
-            catch (Exception)
-            {
-                img = null;
-            }
-        }
-        img ??= Placeholder(title);
-
-        lock (Lock)
-        {
-            if (Cache.Count >= MaxEntries) Cache.Clear();     // 简单粗暴的容量控制
-            Cache[key] = img;
-        }
-        return img;
     }
 
-    /// <summary>没有可用图标时画一个色块 + 首字母，比空格子好看，也不依赖任何图片解码。</summary>
-    private static System.Windows.Media.ImageSource Placeholder(string title)
+    /// <summary>
+    /// 下载并解码一张图标。注意不能用 BitmapImage 的 UriSource 让 WPF 自己去下载：
+    /// 那样拿到的是"下载中"的位图，Freeze 会抛「无法冻结此 Freezable」，
+    /// 界面上就是一片空白。这里自己取字节、从内存流解码，解码完就能冻结缓存。
+    /// </summary>
+    public static async Task<System.Windows.Media.ImageSource?> LoadAsync(string url,
+        CancellationToken ct = default)
     {
-        var name = string.IsNullOrWhiteSpace(title) ? "?" : title.Trim();
-        var palette = new[]
-        {
-            "#4F8EF7", "#7C5CFC", "#2FA36B", "#E0803A", "#D9534F", "#2E9CB0", "#8E6BD8", "#5A6B8C"
-        };
-        var sum = 0;
-        foreach (var ch in name) sum = (sum * 31 + ch) & 0x7FFFFFFF;
-        var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter
-            .ConvertFromString(palette[sum % palette.Length])!;
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        if (TryGet(url) is { } cached2) return cached2;
+        if (!Loading.TryAdd(url, true)) return null;         // 已经在取了
 
-        var initials = new string(name
-            .Split(new[] { ' ', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries)
-            .Take(2)
-            .Select(w => char.ToUpperInvariant(w[0]))
-            .ToArray());
-        if (initials.Length == 0) initials = "?";
-
-        const int size = 64;
-        var visual = new System.Windows.Media.DrawingVisual();
-        using (var dc = visual.RenderOpen())
+        try
         {
-            dc.DrawRoundedRectangle(new System.Windows.Media.SolidColorBrush(color), null,
-                new System.Windows.Rect(0, 0, size, size), 14, 14);
-            var text = new System.Windows.Media.FormattedText(initials,
-                System.Globalization.CultureInfo.CurrentUICulture,
-                System.Windows.FlowDirection.LeftToRight,
-                new System.Windows.Media.Typeface("Segoe UI Semibold"), 26,
-                System.Windows.Media.Brushes.White, 1.0);
-            dc.DrawText(text, new System.Windows.Point((size - text.Width) / 2,
-                (size - text.Height) / 2));
+            var bytes = await Http.GetBytesAsync(url, ct).ConfigureAwait(false);
+            var img = Decode(bytes);
+            lock (Lock)
+            {
+                if (Cache.Count >= MaxEntries) Cache.Clear();   // 简单粗暴的容量控制
+                Cache[url] = img;
+            }
+            return img;
         }
-        var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(size, size, 96, 96,
-            System.Windows.Media.PixelFormats.Pbgra32);
-        rtb.Render(visual);
-        rtb.Freeze();
-        return rtb;
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            LastError = ex.GetType().Name + ": " + ex.Message;
+            lock (Lock) { Cache[url] = null; }
+            return null;
+        }
+        finally
+        {
+            Loading.TryRemove(url, out _);
+        }
     }
+
+    private static System.Windows.Media.ImageSource? Decode(byte[] bytes)
+    {
+        try
+        {
+            using var ms = new MemoryStream(bytes, false);
+            var bmp = new System.Windows.Media.Imaging.BitmapImage();
+            bmp.BeginInit();
+            bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            bmp.DecodePixelWidth = 64;                       // 只要缩略图，别解码原图
+            bmp.StreamSource = ms;
+            bmp.EndInit();
+            // 解出来 1x1 说明这个格式本机解不了（比如 WebP），当作没有图标
+            if (bmp.PixelWidth <= 1 || bmp.PixelHeight <= 1)
+            {
+                LastError = "解出来是 1x1（格式不支持？）";
+                return null;
+            }
+            bmp.Freeze();                                    // 冻结后可跨线程复用
+            return bmp;
+        }
+        catch (Exception ex)
+        {
+            LastError = ex.GetType().Name + ": " + ex.Message;
+            return null;
+        }
+    }
+
+
 }
 
 /// <summary>模组检索与下载。数据来自 Modrinth 官方 API，文件走它的 CDN，不做镜像。</summary>
@@ -177,6 +214,9 @@ public static class Modrinth
 
         var node = await Http.GetJsonAsync(url, ct).ConfigureAwait(false);
         var hits = new List<ModHit>();
+        // 检索接口给的 icon_url 是 WebP（WPF 解不了，界面上就是空白），
+        // 这里一次性问同批项目要「原图」地址，绝大多数都是 PNG，直接能显示。
+        var rawIcons = await RawIconMapAsync(node["hits"] as JsonArray, ct).ConfigureAwait(false);
         if (node["hits"] is JsonArray arr)
         {
             foreach (var n in arr)
@@ -188,7 +228,8 @@ public static class Modrinth
                     Slug = h["slug"]?.ToString() ?? "",
                     Title = h["title"]?.ToString() ?? "",
                     Description = h["description"]?.ToString() ?? "",
-                    IconUrl = h["icon_url"]?.ToString() ?? "",
+                    IconUrl = rawIcons.GetValueOrDefault(h["project_id"]?.ToString() ?? "")
+                               ?? h["icon_url"]?.ToString() ?? "",
                     License = h["license"]?.ToString() ?? "",
                     Downloads = h["downloads"]?.GetValue<long>() ?? 0,
                     Categories = string.Join(" ", (h["display_categories"] as JsonArray ?? h["categories"] as JsonArray ?? new JsonArray())
@@ -197,6 +238,44 @@ public static class Modrinth
             }
         }
         return (hits, node["total_hits"]?.GetValue<long>() ?? hits.Count);
+    }
+
+    /// <summary>
+    /// 一次性拿到一批项目的「原图」图标地址（/projects?ids=[...]）。失败就当没有，不影响检索。
+    /// </summary>
+    private static async Task<Dictionary<string, string>> RawIconMapAsync(JsonArray? hits, CancellationToken ct)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (hits is null) return map;
+        var ids = hits.OfType<JsonObject>()
+            .Select(h => h["project_id"]?.ToString() ?? "")
+            .Where(s => s.Length > 0)
+            .Take(64)
+            .ToList();
+        if (ids.Count == 0) return map;
+        try
+        {
+            var url = Api + "/projects?ids=" +
+                      Uri.EscapeDataString(new JsonArray(ids.Select(i => (JsonNode)i).ToArray()).ToJsonString());
+            var list = await Http.GetJsonAsync(url, ct).ConfigureAwait(false);
+            if (list is not JsonArray arr) return map;
+            foreach (var n in arr)
+            {
+                if (n is not JsonObject p) continue;
+                var id = p["id"]?.ToString() ?? "";
+                var raw = p["raw_icon_url"]?.ToString();
+                if (id.Length > 0 && !string.IsNullOrWhiteSpace(raw)) map[id] = raw!;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // 图标是锦上添花，拿不到就退回检索结果里的 icon_url
+        }
+        return map;
     }
 
     /// <summary>取某个项目匹配版本的文件列表，按发布时间倒序。</summary>

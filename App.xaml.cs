@@ -337,6 +337,16 @@ public partial class App : Application
                 var (hits, total) = await Modrinth.SearchAsync("sodium", "1.21.1", "fabric", "relevance", 0, 20,
                     CancellationToken.None);
                 sb.AppendLine("检索：命中=" + hits.Count + " 总数=" + total + "（应 >0）");
+                // 图标必须是能解码的位图（Modrinth 检索接口默认给 WebP，本机解不了）
+                var iconOk = 0;
+                var iconWebp = 0;
+                foreach (var h in hits)
+                {
+                    if (h.IconUrl.EndsWith(".webp", StringComparison.OrdinalIgnoreCase)) iconWebp++;
+                    if (await ModIconCache.LoadAsync(h.IconUrl) is not null) iconOk++;
+                }
+                sb.AppendLine($"图标：可显示={iconOk} 仍是 WebP={iconWebp}（共 {hits.Count}，应全部可显示且 WebP=0）");
+                if (iconOk == 0) sb.AppendLine("  图标加载错误：" + (ModIconCache.LastError ?? "（无）"));
 
                 var target = hits.FirstOrDefault(h => h.Title.Contains("Sodium", StringComparison.OrdinalIgnoreCase))
                              ?? hits.FirstOrDefault();
