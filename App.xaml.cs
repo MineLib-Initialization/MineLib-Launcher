@@ -28,9 +28,8 @@ public partial class App : Application
             try
             {
                 MessageBox.Show(
-                    "启动器遇到了一个错误，已经记到日志里：" + Environment.NewLine + Environment.NewLine +
-                    (string.IsNullOrEmpty(path) ? ev.Exception.Message : path) + Environment.NewLine + Environment.NewLine +
-                    "界面还能继续用，但如果反复出现，请把这个文件发给我。",
+                    "本次操作出现错误，再次执行刚才的操作以重试。" + Environment.NewLine + Environment.NewLine +
+                    "日志：" + (path ?? ""),
                     "MineLib 出错了", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
             catch (Exception) { }
@@ -1378,7 +1377,7 @@ public partial class App : Application
             {
                 try
                 {
-                    MessageBox.Show("启动器启动失败：" + Environment.NewLine + Environment.NewLine + ex.Message,
+                    MessageBox.Show("在打开启动器时出现错误，重新打开启动器以重试。",
                         "MineLib 启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
                 catch (Exception) { }

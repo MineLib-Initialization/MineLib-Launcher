@@ -270,7 +270,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SetStatus("读取版本列表失败：" + ex.Message, false);
+            AppendLog("读取客户端列表失败：" + ex.Message);
+            SetStatus(Notice.Error("读取客户端列表", "再次切换客户端文件夹以重试"), false);
             return;
         }
         if (seq != _versionScanSeq) return;
@@ -369,14 +370,15 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _merged = null;
-            SetStatus("读取版本 json 失败：" + ex.Message, false);
+            AppendLog("读取版本信息失败：" + ex.Message);
+            SetStatus(Notice.Error("读取版本信息", "再次选择该客户端以重试"), false);
         }
 
         if (_merged is not null)
         {
             var major = _merged["javaVersion"]?["majorVersion"]?.GetValue<int>() ?? 0;
             if (major > 0 && _javaMajor > 0 && major != _javaMajor)
-                SetStatus($"这个版本需要 Java {major}，当前选中的是 Java {_javaMajor}。", false);
+                SetStatus($"这个版本需要 Java {major}，当前是 Java {_javaMajor}，换好 Java 后再次点击启动游戏以重试", false);
             else if (!string.IsNullOrEmpty(_javaNote))
                 SetStatus("就绪 · " + _javaNote, false);
         }
@@ -398,7 +400,9 @@ public partial class MainWindow : Window
             ? "Java：未找到"
             : $"Java {result.major} · 内存 {_cfg.MemoryMb} MB";
         if (_current is not null)
-            SetStatus(string.IsNullOrEmpty(result.exe) ? "没有找到 Java，请安装 Java 21" : "就绪", false);
+            SetStatus(string.IsNullOrEmpty(result.exe)
+                ? "没有找到 Java 21，装好后再次点击启动游戏以重试"
+                : "就绪", false);
     }
 
     private async void OnFetchJavaClick(object sender, RoutedEventArgs e)
@@ -424,8 +428,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SetStatus("获取 Java 失败：" + ex.Message, false);
             AppendLog("获取 Java 失败：" + ex.Message);
+            SetStatus(Notice.Error("获取 Java", "再次点击获取 Java 以重试"), false);
         }
         finally
         {
@@ -482,11 +486,12 @@ public partial class MainWindow : Window
         try
         {
             if (Directory.Exists(path)) Process.Start(new ProcessStartInfo("explorer.exe", '"' + path + '"'));
-            else SetStatus("目录不存在：" + path, false);
+            else SetStatus("客户端文件夹不存在，重新选择一个文件夹后再试", false);
         }
         catch (Exception ex)
         {
-            SetStatus("打开目录失败：" + ex.Message, false);
+            AppendLog("打开文件夹失败：" + ex.Message);
+            SetStatus(Notice.Error("打开文件夹", "再次点击该按钮以重试"), false);
         }
     }
 
@@ -578,11 +583,14 @@ public partial class MainWindow : Window
             var best = results.Where(x => x.r.Ok)
                 .OrderByDescending(x => x.r.Kbps)
                 .Select(x => x.s.Name).FirstOrDefault();
-            SetStatus(best is null ? "两个下载源都没测通，检查网络" : "测速完成，当前更快的是「" + best + "」", false);
+            SetStatus(best is null
+                ? "两个下载源都没有连通，再次点击测速以重试"
+                : "测速完成，当前更快的是「" + best + "」", false);
         }
         catch (Exception ex)
         {
-            SetStatus("测速失败：" + ex.Message, false);
+            AppendLog("测速失败：" + ex.Message);
+            SetStatus(Notice.Error("测速", "再次点击测速以重试"), false);
         }
         finally
         {
@@ -605,7 +613,7 @@ public partial class MainWindow : Window
         }
         if (!Directory.Exists(src))
         {
-            SetStatus("当前客户端文件夹不存在：" + src, false);
+            SetStatus("当前客户端文件夹不存在，换一个文件夹后再迁移", false);
             return;
         }
         var sizeMb = 0.0;
@@ -619,14 +627,13 @@ public partial class MainWindow : Window
             "把当前客户端文件夹搬到启动器目录？" + Environment.NewLine + Environment.NewLine +
             "从：" + src + Environment.NewLine +
             "到：" + dst + Environment.NewLine + Environment.NewLine +
-            "约 " + Math.Round(sizeMb) + " MB。同盘直接改名；目标已存在则按文件合并，不会覆盖已有的。" +
-            Environment.NewLine + Environment.NewLine + "游戏正在运行或文件被占用时可能失败，失败会保留原目录。",
+            "约 " + Math.Round(sizeMb) + " MB。同盘直接改名；目标已存在则按文件合并，不会覆盖已有的。",
             "迁移到启动器目录", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (ok != MessageBoxResult.Yes) return;
 
         if (_proc is { Running: true })
         {
-            SetStatus("游戏正在运行，先关掉再迁移。", false);
+            SetStatus("游戏正在运行，关闭游戏后再次点击迁移以重试", false);
             return;
         }
 
@@ -655,7 +662,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SetStatus("迁移失败（原目录保留）：" + ex.Message, false);
+            AppendLog("迁移客户端文件夹失败：" + ex.Message);
+            SetStatus(Notice.Error("迁移客户端文件夹", "再次点击迁移到启动器目录以重试"), false);
         }
         finally
         {
@@ -674,7 +682,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SetStatus("打不开浏览器：" + ex.Message, false);
+            AppendLog("打开浏览器失败：" + ex.Message);
+            SetStatus(Notice.Error("打开浏览器", "手动打开登录页面后再次点击登录以重试"), false);
         }
     }
 
@@ -805,7 +814,8 @@ public partial class MainWindow : Window
             {
                 BtnLaunch.IsEnabled = true;
                 BtnStop.Visibility = Visibility.Collapsed;
-                SetStatus(code == 0 ? "游戏已退出" : "游戏异常退出，退出码 " + code, false);
+                AppendLog("游戏退出，退出码 " + code);
+                SetStatus(code == 0 ? "游戏已退出" : "游戏异常退出，再次点击启动游戏以重试", false);
                 ShowPane("client");
                 Tabs.SelectedIndex = 1;
             });
@@ -820,8 +830,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SetStatus(ex.Message, false);
-            AppendLog("启动失败：" + ex.Message);
+            AppendLog("启动游戏失败：" + ex.Message);
+            SetStatus(Notice.Error("启动游戏", "再次点击启动游戏以重试"), false);
             ShowPane("client");
             Tabs.SelectedIndex = 1;
         }
@@ -935,7 +945,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SetStatus("打开日志失败：" + ex.Message, false);
+            AppendLog("打开日志文件失败：" + ex.Message);
+            SetStatus(Notice.Error("打开日志文件", "再次点击查看日志以重试"), false);
         }
     }
 
@@ -978,7 +989,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            LblMsStatus.Text = ex.Message;
+            AppendLog("微软登录初始化失败：" + ex.Message);
+            LblMsStatus.Text = Notice.Error("登录微软账号", "再次点击登录以重试，一直失败可改用离线或外置登录");
             return;
         }
         BtnMsLogin.IsEnabled = false;
@@ -1010,7 +1022,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            LblMsStatus.Text = ex.Message;
+            AppendLog("微软登录失败：" + ex.Message);
+            LblMsStatus.Text = Notice.Error("登录微软账号", "再次点击登录以重试，一直失败可改用离线或外置登录");
         }
         finally
         {
@@ -1037,12 +1050,14 @@ public partial class MainWindow : Window
             }
             catch (Exception ex2)
             {
-                LblYggStatus.Text += "（注入器下载失败：" + ex2.Message + "）";
+                AppendLog("外置登录组件下载失败：" + ex2.Message);
+                LblYggStatus.Text = "已登录，但外置登录组件没有准备好，再次点击启动游戏以重试";
             }
         }
         catch (Exception ex)
         {
-            LblYggStatus.Text = ex.Message;
+            AppendLog("外置登录失败：" + ex.Message);
+            LblYggStatus.Text = Notice.Error("登录外置账号", "再次点击登录以重试");
         }
         finally
         {
@@ -1131,9 +1146,10 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            var msg = ex.Message.Split((char)10)[0];
-            LblUpdateState.Text = "检查更新失败：" + msg;
-            if (manual) SetStatus("检查更新失败：" + msg, false);
+            AppendLog("检查更新失败：" + ex.Message);
+            var text = Notice.Error("检查更新", "再次点击检查更新以重试");
+            LblUpdateState.Text = text;
+            if (manual) SetStatus(text, false);
         }
         finally
         {
@@ -1290,7 +1306,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SetStatus("删除失败（文件可能被占用）：" + ex.Message, false);
+            AppendLog("删除客户端失败：" + ex.Message);
+            SetStatus(Notice.Error("删除客户端", "再次点击删除以重试"), false);
         }
     }
 
@@ -1312,7 +1329,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SetStatus("打开 mods 目录失败：" + ex.Message, false);
+            AppendLog("打开模组文件夹失败：" + ex.Message);
+            SetStatus(Notice.Error("打开模组文件夹", "再次点击模组文件夹以重试"), false);
         }
     }
 
@@ -1399,7 +1417,9 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            if (seq == _modSearchSeq) LblModStatus.Text = "检索失败：" + Modrinth.FriendlyHttpError(ex);
+            AppendLog("检索模组失败：" + Modrinth.FriendlyHttpError(ex));
+            if (seq == _modSearchSeq)
+                LblModStatus.Text = Notice.Error("检索模组", "再次点击搜索以重试");
         }
     }
 
@@ -1440,7 +1460,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            LblModDownload.Text = "读取失败：" + ex.Message;
+            AppendLog("读取模组文件列表失败：" + ex.Message);
+            LblModDownload.Text = Notice.Error("读取模组文件", "再次选择该模组以重试");
         }
     }
 
@@ -1465,14 +1486,15 @@ public partial class MainWindow : Window
             });
             var (ok, path, skipped) = await Modrinth.DownloadAsync(file, dir, progress, CancellationToken.None);
             LblModDownload.Text = !ok
-                ? "下载失败（网络或文件已被作者删除）"
+                ? Notice.Error("下载模组", "再次点击下载以重试")
                 : skipped ? "这个文件已经在 mods 里了，跳过"
                 : "已保存到 " + Path.GetFileName(path);
             if (ok) SetStatus((skipped ? "已存在，跳过 " : "已下载 ") + Path.GetFileName(path), false);
         }
         catch (Exception ex)
         {
-            LblModDownload.Text = "下载失败：" + ex.Message;
+            AppendLog("下载模组失败：" + ex.Message);
+            LblModDownload.Text = Notice.Error("下载模组", "再次点击下载以重试");
         }
         finally
         {
@@ -1618,7 +1640,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            LblCreateStatus.Text = "读取清单失败：" + ex.Message;
+            AppendLog("读取游戏版本清单失败：" + ex.Message);
+            LblCreateStatus.Text = Notice.Error("读取游戏版本清单", "再次打开创建面板以重试");
         }
     }
 
@@ -1651,7 +1674,8 @@ public partial class MainWindow : Window
                 }
                 catch (Exception ex)
                 {
-                    LblCreateStatus.Text = "获取 Java 失败：" + ex.Message;
+                    AppendLog("获取 Java 失败：" + ex.Message);
+                    LblCreateStatus.Text = Notice.Error("获取 Java", "再次点击创建新客户端以重试");
                     return;
                 }
             }
@@ -1693,8 +1717,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            LblCreateStatus.Text = "创建失败：" + ex.Message;
             AppendLog("创建客户端失败：" + ex.Message);
+            LblCreateStatus.Text = Notice.Error("创建客户端", "再次点击创建新客户端以重试");
         }
         finally
         {
