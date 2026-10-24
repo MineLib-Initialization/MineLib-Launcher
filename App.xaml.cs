@@ -25,12 +25,18 @@ public partial class App : Application
                 ev.Handled = true;
                 return;
             }
+            // 主界面在就走界面内提示（不弹系统对话框）；连窗口都没起来才用兜底窗口
             try
             {
-                MessageBox.Show(
-                    "本次操作出现错误，再次执行刚才的操作以重试。" + Environment.NewLine + Environment.NewLine +
-                    "日志：" + (path ?? ""),
-                    "MineLib 出错了", MessageBoxButton.OK, MessageBoxImage.Warning);
+                if (Current?.MainWindow is MainWindow win)
+                {
+                    win.Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        _ = win.AlertAsync("本次操作出现错误",
+                            "再次执行刚才的操作以重试。" + Environment.NewLine + Environment.NewLine +
+                            "日志：" + (path ?? ""));
+                    }));
+                }
             }
             catch (Exception) { }
             ev.Handled = true;   // 界面不因此退出
@@ -1381,14 +1387,14 @@ public partial class App : Application
         catch (Exception ex)
         {
             // 启动阶段崩了也要留下证据，而不是静默退出
-            CrashReporter.Report(ex, "启动");
+            var logPath = CrashReporter.Report(ex, "启动");
             if (!Environment.GetCommandLineArgs()
                 .Any(a => a.StartsWith("--selftest", StringComparison.OrdinalIgnoreCase)))
             {
                 try
                 {
-                    MessageBox.Show("在打开启动器时出现错误，重新打开启动器以重试。",
-                        "MineLib 启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
+                    NoticeWindow.ShowError("在打开启动器时出现错误",
+                        "重新打开启动器以重试。如果一直打不开，把日志发给作者。", logPath);
                 }
                 catch (Exception) { }
             }

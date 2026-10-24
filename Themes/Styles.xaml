@@ -183,6 +183,36 @@
     <Setter Property="Background" Value="Transparent" />
   </Style>
 
+  <!-- 破坏性操作的确认按钮：红底白字，一眼看出后果 -->
+  <Style x:Key="DangerSolid" TargetType="Button" BasedOn="{StaticResource Primary}">
+    <Setter Property="Background" Value="{StaticResource Err}" />
+    <Setter Property="BorderBrush" Value="{StaticResource Err}" />
+    <Setter Property="Foreground" Value="White" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="bd" Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                  CornerRadius="5" SnapsToDevicePixels="True">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Margin="{TemplateBinding Padding}" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="Opacity" Value="0.88" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="bd" Property="Opacity" Value="0.78" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter TargetName="bd" Property="Opacity" Value="0.4" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- 标题栏的窗口按钮：无边框、悬停变色、关闭是红底 -->
   <Style x:Key="CaptionButton" TargetType="Button">
     <Setter Property="FontFamily" Value="{StaticResource IconFont}" />

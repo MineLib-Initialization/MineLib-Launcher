@@ -871,6 +871,45 @@
           </StackPanel>
         </DockPanel>
       </Border>
+
+      <!-- 界面内提示条：不走系统通知，几秒后自己消失 -->
+      <Border x:Name="NoticeBar" Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+              Margin="0,0,18,14" Padding="14,9" CornerRadius="8" Visibility="Collapsed"
+              Background="{StaticResource Panel}" BorderBrush="{StaticResource BorderStrong}"
+              BorderThickness="1" Panel.ZIndex="20">
+        <StackPanel Orientation="Horizontal">
+          <Border x:Name="NoticeStripe" Width="3" CornerRadius="2" Background="{StaticResource Accent}"
+                  Margin="0,0,10,0" />
+          <TextBlock x:Name="NoticeText" Text="" FontSize="12.5" VerticalAlignment="Center"
+                     TextWrapping="Wrap" MaxWidth="620" />
+          <Button Content="✕" Click="OnNoticeCloseClick" Style="{StaticResource CaptionButton}"
+                  Width="26" Height="22" Margin="10,0,0,0" ToolTip="关闭" />
+        </StackPanel>
+      </Border>
+
+      <!-- 界面内确认卡片：替代系统对话框 -->
+      <Grid x:Name="AskLayer" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed" Panel.ZIndex="30"
+            Background="#66000000">
+        <Border Background="{StaticResource Panel}" CornerRadius="10"
+                BorderBrush="{StaticResource BorderStrong}" BorderThickness="1"
+                MaxWidth="560" VerticalAlignment="Center" HorizontalAlignment="Center"
+                Padding="20,16">
+          <StackPanel>
+            <TextBlock x:Name="AskTitle" Text="" FontSize="15" FontWeight="SemiBold" />
+            <ScrollViewer MaxHeight="330" VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+              <TextBlock x:Name="AskBody" Text="" TextWrapping="Wrap" FontSize="12.5"
+                         Foreground="{StaticResource TextDim}" LineHeight="20" />
+            </ScrollViewer>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+              <Button x:Name="BtnAskCancel" Content="取消" Click="OnAskCancelClick"
+                      Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
+                      Background="{StaticResource Panel}" MinWidth="84" Margin="0,0,8,0" />
+              <Button x:Name="BtnAskOk" Content="确定" Click="OnAskOkClick"
+                      Style="{StaticResource Primary}" MinWidth="96" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+      </Grid>
     </Grid>
   </Border>
 </Window>
