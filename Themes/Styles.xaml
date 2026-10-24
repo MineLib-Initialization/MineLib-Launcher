@@ -37,6 +37,7 @@
   <SolidColorBrush x:Key="Ok" Color="{StaticResource OkColor}" />
   <SolidColorBrush x:Key="Warn" Color="{StaticResource WarnColor}" />
   <SolidColorBrush x:Key="Err" Color="{StaticResource ErrColor}" />
+  <SolidColorBrush x:Key="CloseHover" Color="{StaticResource CloseHoverColor}" />
 
   <FontFamily x:Key="UiFont">Microsoft YaHei UI, Segoe UI</FontFamily>
   <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas, Courier New</FontFamily>
@@ -246,7 +247,7 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="bd" Property="Background" Value="{StaticResource CloseHoverColor}" />
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource CloseHover}" />
               <Setter Property="Foreground" Value="White" />
             </Trigger>
           </ControlTemplate.Triggers>
