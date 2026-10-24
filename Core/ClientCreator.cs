@@ -35,7 +35,7 @@ public static class ClientCreator
     /// </summary>
     public static async Task<Result> CreateAsync(AppConfig cfg, string name, string mcver,
         string loaderLabel, int threads, string javaExe, IProgress<InstallProgress>? progress,
-        Action<string>? log, CancellationToken ct)
+        Action<string>? log, CancellationToken ct, string loaderVersion = "")
     {
         var error = Validate(cfg, name, out var safeName);
         if (error is not null) throw new InvalidOperationException(error);
@@ -57,7 +57,14 @@ public static class ClientCreator
 
             progress?.Report(new InstallProgress("读取 " + Loaders.Label(kind.Value) + " 版本…", 0.99));
             var versions = await Loaders.VersionsAsync(kind.Value, mcver, ct).ConfigureAwait(false);
-            var lv = versions.FirstOrDefault(x => x.Channel == "稳定") ?? versions.FirstOrDefault();
+            // 整合包一般锁死加载器版本，能对上就用它，对不上才退回最新稳定版
+            var lv = string.IsNullOrWhiteSpace(loaderVersion)
+                ? null
+                : versions.FirstOrDefault(x => string.Equals(x.Version, loaderVersion, StringComparison.OrdinalIgnoreCase));
+            if (lv is null && !string.IsNullOrWhiteSpace(loaderVersion))
+                log?.Invoke("整合包指定的 " + Loaders.Label(kind.Value) + " " + loaderVersion +
+                            " 在 " + mcver + " 上没有构建，改用最新稳定版");
+            lv ??= versions.FirstOrDefault(x => x.Channel == "稳定") ?? versions.FirstOrDefault();
             if (lv is null)
                 throw new InvalidOperationException("这个游戏版本没有可用的 " + Loaders.Label(kind.Value) + " 构建。");
 

@@ -15,7 +15,8 @@
 
   <Border x:Name="RootBorder" Background="{StaticResource Bg}" CornerRadius="10"
           BorderBrush="{StaticResource BorderStrong}" BorderThickness="1"
-          SizeChanged="OnShellSizeChanged">
+          SizeChanged="OnShellSizeChanged" AllowDrop="True"
+          DragOver="OnShellDragOver" DragLeave="OnShellDragLeave" Drop="OnShellDrop">
     <Grid>
       <Grid.RowDefinitions>
         <RowDefinition Height="40" />
@@ -270,7 +271,8 @@
             </DockPanel>
           </Border>
 
-              <TabControl Grid.Row="1" x:Name="Tabs" Margin="18,0,18,4">
+              <TabControl Grid.Row="1" x:Name="Tabs" Margin="18,0,18,4"
+                          SelectionChanged="OnClientTabChanged">
             <TabItem Header="启动">
               <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
                 <Grid Margin="0,0,6,16">
@@ -385,6 +387,71 @@
                   <TextBlock x:Name="LblLogPath" Text="" Style="{StaticResource Faint}"
                              VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
+              </Grid>
+            </TabItem>
+            <TabItem Header="模组">
+              <Grid Margin="0,12,0,4">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="*" />
+                  <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                  <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Content="刷新" Click="OnModsRefreshClick" Style="{StaticResource Ghost}"
+                            BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}" />
+                  </StackPanel>
+                  <TextBlock x:Name="LblClientModsStat" Text="还没有模组" Style="{StaticResource Faint}"
+                             VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                             Margin="0,0,10,0" />
+                </DockPanel>
+
+                <Border Grid.Row="1" BorderBrush="{StaticResource Border}" BorderThickness="1"
+                        CornerRadius="5" ClipToBounds="True">
+                  <ListBox x:Name="ClientModList" SelectionMode="Extended"
+                           ItemContainerStyle="{StaticResource RowItem}"
+                           SelectionChanged="OnClientModSelectionChanged">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate>
+                        <Grid>
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"
+                                     VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="1" Text="{Binding State}" FontSize="11"
+                                     Foreground="{StaticResource TextDim}" Margin="10,0,0,0"
+                                     VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="2" Text="{Binding SizeText}" Style="{StaticResource Mono}"
+                                     Foreground="{StaticResource TextFaint}" Margin="10,0,0,0"
+                                     VerticalAlignment="Center" />
+                        </Grid>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                </Border>
+
+                <DockPanel Grid.Row="2" Margin="0,8,0,0">
+                  <TextBlock x:Name="LblClientModsHint" DockPanel.Dock="Right" Text=""
+                             Style="{StaticResource Faint}" VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis" MaxWidth="360" Margin="10,0,0,0" />
+                  <StackPanel Orientation="Horizontal">
+                    <Button x:Name="BtnModDisable" Content="禁用选中" Click="OnModDisableClick"
+                            Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
+                            Background="{StaticResource Panel}" Margin="0,0,6,0" />
+                    <Button x:Name="BtnModEnable" Content="启用选中" Click="OnModEnableClick"
+                            Style="{StaticResource Ghost}" BorderBrush="{StaticResource Border}"
+                            Background="{StaticResource Panel}" Margin="0,0,6,0" />
+                    <Button Content="全选" Click="OnModSelectAllClick" Style="{StaticResource Ghost}"
+                            BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}"
+                            Margin="0,0,6,0" />
+                    <Button Content="打开 mods 目录" Click="OnOpenModsDirClick" Style="{StaticResource Ghost}"
+                            BorderBrush="{StaticResource Border}" Background="{StaticResource Panel}" />
+                  </StackPanel>
+                </DockPanel>
               </Grid>
             </TabItem>
               </TabControl>

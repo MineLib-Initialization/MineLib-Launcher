@@ -279,6 +279,403 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 模组开关自检：改名规则、重复操作、文件名冲突、大小写、批量性能
+        if (e.Args.Contains("--selftest-modmgr"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-mods-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                Directory.CreateDirectory(work);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                const int bulk = 500;
+                for (var i = 0; i < bulk; i++)
+                    File.WriteAllBytes(Path.Combine(work, $"mod-{i:000}.jar"), new byte[64]);
+                File.WriteAllBytes(Path.Combine(work, "already-a.jar.disable"), new byte[64]);
+                File.WriteAllBytes(Path.Combine(work, "already-b.jar.disabled"), new byte[64]);
+                File.WriteAllBytes(Path.Combine(work, "readme.txt"), new byte[8]);
+                File.WriteAllBytes(Path.Combine(work, "notes.txt.disable"), new byte[8]);
+                sw.Stop();
+                sb.AppendLine($"准备 {bulk} 个 jar：{sw.ElapsedMilliseconds} ms");
+
+                sw.Restart();
+                var list = ModManager.List(work);
+                sw.Stop();
+                var enabledCount = list.Count(m => m.Enabled);
+                var excluded = list.All(m => !m.Name.StartsWith("readme") && !m.Name.StartsWith("notes"));
+                sb.AppendLine($"扫描：{list.Count} 个（启用 {enabledCount} / 禁用 {list.Count - enabledCount}），" +
+                              $"耗时 {sw.ElapsedMilliseconds} ms，非模组文件已排除 = {excluded}");
+                var okList = list.Count == bulk + 2 && enabledCount == bulk && excluded;
+
+                var one = Path.Combine(work, "mod-000.jar");
+                var r1 = ModManager.Disable(one);
+                var okDisable = r1.Outcome == ModManager.ToggleOutcome.Disabled
+                                && File.Exists(one + ".disable") && !File.Exists(one);
+                var r2 = ModManager.Disable(one + ".disable");
+                var okDisableTwice = r2.Outcome == ModManager.ToggleOutcome.AlreadyDisabled;
+                var r3 = ModManager.Enable(one + ".disable");
+                var okEnable = r3.Outcome == ModManager.ToggleOutcome.Enabled && File.Exists(one);
+                var r4 = ModManager.Enable(one);
+                var okEnableTwice = r4.Outcome == ModManager.ToggleOutcome.AlreadyEnabled;
+                sb.AppendLine($"单个切换：禁用={okDisable} 重复禁用被挡={okDisableTwice} " +
+                              $"启用={okEnable} 重复启用被挡={okEnableTwice}");
+
+                var legacy = ModManager.Enable(Path.Combine(work, "already-b.jar.disabled"));
+                var okLegacy = legacy.Outcome == ModManager.ToggleOutcome.Enabled
+                               && File.Exists(Path.Combine(work, "already-b.jar"));
+                sb.AppendLine("兼容 .disabled = " + okLegacy);
+
+                File.WriteAllBytes(Path.Combine(work, "dup.jar"), new byte[16]);
+                File.WriteAllBytes(Path.Combine(work, "dup.jar.disable"), new byte[16]);
+                var dupDisable = ModManager.Disable(Path.Combine(work, "dup.jar"));
+                var dupEnable = ModManager.Enable(Path.Combine(work, "dup.jar.disable"));
+                var dupIntact = File.Exists(Path.Combine(work, "dup.jar")) &&
+                                File.Exists(Path.Combine(work, "dup.jar.disable"));
+                var okDup = dupDisable.Outcome == ModManager.ToggleOutcome.NameTaken
+                            && dupEnable.Outcome == ModManager.ToggleOutcome.NameTaken && dupIntact;
+                sb.AppendLine($"目标名被占用：禁用={dupDisable.Outcome} 启用={dupEnable.Outcome} 原文件都在={dupIntact}");
+
+                File.WriteAllBytes(Path.Combine(work, "Upper.JAR"), new byte[16]);
+                var up1 = ModManager.Disable(Path.Combine(work, "Upper.JAR"));
+                var up2 = ModManager.Enable(up1.Path);
+                var okUpper = up1.Outcome == ModManager.ToggleOutcome.Disabled
+                              && up2.Outcome == ModManager.ToggleOutcome.Enabled
+                              && File.Exists(Path.Combine(work, "Upper.JAR"));
+                sb.AppendLine("大小写后缀 = " + okUpper);
+
+                var missing = ModManager.Disable(Path.Combine(work, "nope.jar"));
+                var okMissing = missing.Outcome == ModManager.ToggleOutcome.Failed;
+                sb.AppendLine("文件不在时给 Failed = " + okMissing);
+
+                // 冲突用例的两个文件先清掉，否则批量里的 dup.jar 会（正确地）被判 NameTaken
+                File.Delete(Path.Combine(work, "dup.jar"));
+                File.Delete(Path.Combine(work, "dup.jar.disable"));
+                var all = ModManager.List(work).Where(m => m.Enabled).Select(m => m.Path).ToList();
+                sw.Restart();
+                var bulkDisable = ModManager.DisableMany(all);
+                sw.Stop();
+                var disableMs = sw.ElapsedMilliseconds;
+                var disabledAll = bulkDisable.Count(r => r.Outcome == ModManager.ToggleOutcome.Disabled);
+                sw.Restart();
+                var bulkEnable = ModManager.EnableMany(
+                    ModManager.List(work).Where(m => !m.Enabled).Select(m => m.Path).ToList());
+                sw.Stop();
+                var enableMs = sw.ElapsedMilliseconds;
+                var enabledAll = bulkEnable.Count(r => r.Outcome == ModManager.ToggleOutcome.Enabled);
+                sb.AppendLine($"批量：禁用 {disabledAll} 个 / {disableMs} ms，" +
+                              $"启用 {enabledAll} 个 / {enableMs} ms");
+                // 禁用只该动"原本启用"的那批；启用则要覆盖全部禁用项（含测试前就禁用的那个）
+                var okBulk = disabledAll == all.Count && enabledAll == disabledAll + 1;
+
+                var ok = okList && okDisable && okDisableTwice && okEnable && okEnableTwice && okLegacy &&
+                         okDup && okUpper && okMissing && okBulk;
+                sb.AppendLine(ok ? "MODMGR SELFTEST PASS" : "MODMGR SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("MODMGR SELFTEST FAIL " + ex);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-modmgr.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
+
+        // 整合包自检：合成一个 .mrpack（含跳过项、越界路径、overrides），真实装到临时目录
+        if (e.Args.Contains("--selftest-mrpack"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-mr-" + Guid.NewGuid().ToString("N")[..6]);
+            var gameDir = Path.Combine(work, ".minecraft");
+            try
+            {
+                Directory.CreateDirectory(gameDir);
+                const string sampleUrl = "https://launcher.endercraft.top/assets/shots/icon-256.png";
+                var samplePath = Path.Combine(work, "sample.png");
+                if (!await Http.DownloadAsync(sampleUrl, samplePath, null, null))
+                    throw new InvalidOperationException("样例文件下载失败");
+                var sampleSha1 = Http.Sha1Of(samplePath);
+                var sampleSize = new FileInfo(samplePath).Length;
+
+                // 拼一个最小可用的 mrpack
+                var packPath = Path.Combine(work, "TestPack.mrpack");
+                var index = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["formatVersion"] = 1,
+                    ["game"] = "minecraft",
+                    ["versionId"] = "1.0.0",
+                    ["name"] = "测试整合包",
+                    ["summary"] = "自检用",
+                    ["dependencies"] = new System.Text.Json.Nodes.JsonObject { ["minecraft"] = "1.7.10" },
+                    ["files"] = new System.Text.Json.Nodes.JsonArray
+                    {
+                        new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["path"] = "mods/test-mod.jar",
+                            ["hashes"] = new System.Text.Json.Nodes.JsonObject { ["sha1"] = sampleSha1 },
+                            ["env"] = new System.Text.Json.Nodes.JsonObject { ["client"] = "required" },
+                            ["downloads"] = new System.Text.Json.Nodes.JsonArray { sampleUrl },
+                            ["fileSize"] = sampleSize
+                        },
+                        new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["path"] = "mods/server-only.jar",
+                            ["hashes"] = new System.Text.Json.Nodes.JsonObject { ["sha1"] = sampleSha1 },
+                            ["env"] = new System.Text.Json.Nodes.JsonObject { ["client"] = "unsupported" },
+                            ["downloads"] = new System.Text.Json.Nodes.JsonArray { sampleUrl },
+                            ["fileSize"] = sampleSize
+                        },
+                        new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["path"] = "../evil.txt",
+                            ["downloads"] = new System.Text.Json.Nodes.JsonArray { sampleUrl }
+                        }
+                    }
+                };
+                using (var zip = System.IO.Compression.ZipFile.Open(packPath,
+                           System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    void Add(string name, string text)
+                    {
+                        var entry = zip.CreateEntry(name);
+                        using var w = new StreamWriter(entry.Open());
+                        w.Write(text);
+                    }
+                    Add(Modpack.IndexName, index.ToJsonString());
+                    Add("overrides/config/pack.cfg", "pack=1");
+                    Add("client-overrides/config/extra.txt", "extra=1");
+                    Add("server-overrides/server.properties", "motd=should-not-copy");
+                }
+
+                // 1) 只解析
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var info = Modpack.Read(packPath);
+                sw.Stop();
+                var parseOk = info.McVersion == "1.7.10" && info.Files.Count == 1
+                              && info.Files[0].Path == "mods\\test-mod.jar"
+                              && info.Name == "测试整合包";
+                sb.AppendLine($"解析：{info.Detail}，耗时 {sw.ElapsedMilliseconds} ms");
+                sb.AppendLine($"解析结果正确（跳过 server-only、丢弃 ../evil.txt）= {parseOk}");
+
+                // 2) 越界路径消毒
+                var safeCases = new[]
+                {
+                    Modpack.SafeRelativePath("../evil.txt") is null,
+                    Modpack.SafeRelativePath("C:\\Windows\\x.txt") is null,
+                    Modpack.SafeRelativePath("/etc/passwd") is null,
+                    Modpack.SafeRelativePath("mods/ok.jar") == "mods\\ok.jar",
+                    Modpack.SafeRelativePath("config/a/b.cfg") == "config\\a\\b.cfg"
+                };
+                sb.AppendLine("路径消毒 = " + safeCases.All(x => x));
+
+                // 3) 真装一遍（会下 1.7.10 的文件）
+                var cfg = new AppConfig { GameDir = gameDir };
+                var progress = new Progress<InstallProgress>(p => sb.AppendLine("  " + p.Stage));
+                sw.Restart();
+                var result = await Modpack.InstallAsync(cfg, packPath, 16, "", progress,
+                    line => sb.AppendLine("  log: " + line), CancellationToken.None);
+                sw.Stop();
+                sb.AppendLine($"安装：客户端「{result.ClientName}」版本 {result.VersionId}，用时 {sw.Elapsed.TotalSeconds:0.0}s");
+
+                var clientDir = Path.Combine(gameDir, "versions", result.VersionId);
+                var modPath = Path.Combine(clientDir, "mods", "test-mod.jar");
+                var modOk = File.Exists(modPath) && Http.Sha1Of(modPath) == sampleSha1;
+                var skippedOk = !File.Exists(Path.Combine(clientDir, "mods", "server-only.jar"));
+                var overrideOk = File.Exists(Path.Combine(clientDir, "config", "pack.cfg"))
+                                 && File.Exists(Path.Combine(clientDir, "config", "extra.txt"));
+                var serverOverrideOk = !File.Exists(Path.Combine(clientDir, "server.properties"));
+                var evilOk = !File.Exists(Path.Combine(work, "evil.txt")) &&
+                             !File.Exists(Path.Combine(gameDir, "evil.txt"));
+                var registered = cfg.FindClient(result.VersionId) is not null;
+                sb.AppendLine($"模组落盘+sha1={modOk} 跳过只给服务端的={skippedOk} " +
+                              $"overrides 解压={overrideOk} 不解压 server-overrides={serverOverrideOk} " +
+                              $"没有越界文件={evilOk} 已登记客户端={registered}");
+
+                var safeOk = safeCases.All(x => x);
+
+                // 拖入时挑文件：一堆文件里要能挑出那个 .mrpack
+                var pick = Modpack.FirstMrpack(new[] { @"C:\x\a.zip", packPath, @"C:\x\b.txt" });
+                var pickNone = Modpack.FirstMrpack(new[] { @"C:\x\a.zip", @"C:\x\b.txt" });
+                var pickOk = string.Equals(pick, packPath, StringComparison.OrdinalIgnoreCase) && pickNone is null;
+                sb.AppendLine("拖入时挑文件 = " + pickOk);
+
+                // 可选：再解析一个真实整合包（传路径进来）
+                var extraPack = e.Args.FirstOrDefault(a => Modpack.LooksLikeModpack(a) && File.Exists(a));
+                if (extraPack is not null)
+                {
+                    try
+                    {
+                        var real = Modpack.Read(extraPack);
+                        sb.AppendLine($"真实整合包：{real.Name} → {real.Detail}");
+                        // 包锁定加载器版本时，确认那个版本在该游戏版本上真的存在（安装时会优先用它）
+                        if (!string.IsNullOrEmpty(real.LoaderVersion) &&
+                            ClientCreator.ParseLoader(real.LoaderLabel) is { } kind)
+                        {
+                            var vers = await Loaders.VersionsAsync(kind, real.McVersion, CancellationToken.None);
+                            var hit = vers.Any(v => string.Equals(v.Version, real.LoaderVersion,
+                                StringComparison.OrdinalIgnoreCase));
+                            sb.AppendLine($"包锁定的 {real.LoaderLabel} {real.LoaderVersion} 在 {real.McVersion} 上存在 = " +
+                                          hit + "（该游戏版本共 " + vers.Count + " 个构建）");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        sb.AppendLine("真实整合包解析失败：" + ex.Message);
+                    }
+                }
+
+                var ok = parseOk && safeOk && modOk && skippedOk && overrideOk &&
+                         serverOverrideOk && evilOk && registered && pickOk;
+                sb.AppendLine(ok ? "MRPACK SELFTEST PASS" : "MRPACK SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("MRPACK SELFTEST FAIL " + ex);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-mrpack.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
+
+        // 界面接线自检：真的开窗 → 选中假客户端 → 切模组页 → 点「禁用选中」/「启用选中」→ 校验磁盘
+        // 只在便携目录里跑：非便携就跳过，绝不动用户的真实游戏数据。
+        // 界面接线自检：开窗 → 选中假客户端 → 切模组页 → 点「禁用选中」/「启用选中」→ 校验磁盘
+        // 先把启动器目录指到临时目录，配置与游戏目录都在里面，绝不动用户的真实数据。
+        if (e.Args.Contains("--selftest-ui-mods"))
+        {
+            var sb = new StringBuilder();
+            var vid = "ui-modtest";
+            var tempRoot = Path.Combine(Path.GetTempPath(), "minelib-ui-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                Paths.OverrideLauncherDir(tempRoot);
+                var gameDir = Path.Combine(tempRoot, ".minecraft");
+                var vdir = Path.Combine(gameDir, "versions", vid);
+                var modsDir = Path.Combine(vdir, "mods");
+                Directory.CreateDirectory(modsDir);
+                File.WriteAllText(Path.Combine(vdir, vid + ".json"),
+                    "{\"id\":\"" + vid + "\",\"libraries\":[],\"mainClass\":\"net.minecraft.client.main.Main\"}");
+                File.WriteAllBytes(Path.Combine(vdir, vid + ".jar"), new byte[16]);
+                for (var i = 0; i < 3; i++)
+                    File.WriteAllBytes(Path.Combine(modsDir, $"ui-{i}.jar"), new byte[32]);
+
+                // 预先写一份只指向临时目录的配置，MainWindow 载入的就是它
+                var cfgDir = Path.Combine(tempRoot, "MineLibLauncher");
+                Directory.CreateDirectory(cfgDir);
+                var cfgJson = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["GameDir"] = gameDir,
+                    ["Roots"] = new System.Text.Json.Nodes.JsonArray
+                    {
+                        new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Name"] = "测试",
+                            ["Path"] = gameDir,
+                            ["Clients"] = new System.Text.Json.Nodes.JsonArray
+                            {
+                                new System.Text.Json.Nodes.JsonObject
+                                {
+                                    ["VersionId"] = vid,
+                                    ["Name"] = "UI 测试客户端",
+                                    ["McVersion"] = "1.21.1",
+                                    ["Loader"] = "Fabric"
+                                }
+                            }
+                        }
+                    },
+                    ["Version"] = vid,
+                    ["DownloadThreads"] = 8,
+                    ["Isolation"] = true
+                };
+                File.WriteAllText(Path.Combine(cfgDir, "config.json"), cfgJson.ToJsonString());
+
+                var win = new MainWindow();
+                win.Show();
+                void Settle(double seconds)
+                {
+                    var frame = new System.Windows.Threading.DispatcherFrame();
+                    var timer = new System.Windows.Threading.DispatcherTimer
+                        { Interval = TimeSpan.FromSeconds(seconds) };
+                    timer.Tick += (_, _) => { timer.Stop(); frame.Continue = false; };
+                    timer.Start();
+                    System.Windows.Threading.Dispatcher.PushFrame(frame);
+                }
+
+                Settle(2.0);
+                var picked = -1;
+                for (var i = 0; i < win.VersionList.Items.Count; i++)
+                {
+                    if (win.VersionList.Items[i] is VersionInfo vi &&
+                        string.Equals(vi.Id, vid, StringComparison.OrdinalIgnoreCase))
+                    {
+                        picked = i;
+                        break;
+                    }
+                }
+                sb.AppendLine("列表里找到测试客户端 = " + (picked >= 0) + "（列表共 " + win.VersionList.Items.Count + " 项）");
+                if (picked < 0) throw new InvalidOperationException("测试客户端没进列表");
+
+                win.VersionList.SelectedIndex = picked;
+                Settle(1.0);
+                win.Tabs.SelectedIndex = 2;
+                Settle(0.6);
+
+                var listed = win.ClientModList.Items.Cast<ModManager.Entry>().ToList();
+                sb.AppendLine("模组页列出 " + listed.Count + " 个（应为 3）");
+                sb.AppendLine("状态文字：" + win.LblClientModsStat.Text);
+                sb.AppendLine("页面上的模组：" + string.Join(", ", listed.Select(m => m.Name)));
+                var allMine = listed.All(m => m.Path.StartsWith(modsDir, StringComparison.OrdinalIgnoreCase));
+                sb.AppendLine("列出的都是测试客户端的 = " + allMine);
+                if (!allMine || listed.Count != 3) throw new InvalidOperationException("模组页内容不对");
+
+                win.ClientModList.SelectAll();
+                Settle(0.3);
+                sb.AppendLine("选中项数量 = " + win.ClientModList.SelectedItems.Count);
+                if (win.ClientModList.SelectedItems.Count == 0) throw new InvalidOperationException("没选中任何模组");
+                win.BtnModDisable.RaiseEvent(new RoutedEventArgs(
+                    System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Settle(1.5);
+                var disabledOnDisk = Directory.GetFiles(modsDir, "*.jar.disable").Length;
+                var enabledOnDisk = Directory.GetFiles(modsDir, "*.jar").Length;
+                sb.AppendLine("点「禁用选中」后：磁盘 .jar.disable=" + disabledOnDisk + "，剩余 .jar=" +
+                              enabledOnDisk + "，提示：「" + win.LblClientModsHint.Text + "」");
+
+                win.ClientModList.SelectAll();
+                Settle(0.3);
+                win.BtnModEnable.RaiseEvent(new RoutedEventArgs(
+                    System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Settle(1.5);
+                var enabledBack = Directory.GetFiles(modsDir, "*.jar").Length;
+                var disabledLeft = Directory.GetFiles(modsDir, "*.jar.disable").Length;
+                sb.AppendLine("点「启用选中」后：磁盘 .jar=" + enabledBack + "，剩余 .jar.disable=" +
+                              disabledLeft + "，提示：「" + win.LblClientModsHint.Text + "」");
+
+                var ok = listed.Count == 3 && disabledOnDisk == 3 && enabledOnDisk == 0 &&
+                         enabledBack == 3 && disabledLeft == 0;
+                sb.AppendLine(ok ? "UI MODS SELFTEST PASS" : "UI MODS SELFTEST FAIL");
+                win.Close();
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("UI MODS SELFTEST FAIL " + ex.Message);
+            }
+            finally
+            {
+                try { Paths.OverrideLauncherDir(null); } catch (Exception) { }
+                try { if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-uimods.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
+
         // 日志写入器自检：批量刷盘后内容不能丢、行数要对得上
         if (e.Args.Contains("--selftest-log"))
         {

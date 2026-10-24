@@ -419,6 +419,7 @@ public partial class MainWindow : Window
                 SetStatus("就绪 · " + _javaNote, false);
         }
         RefreshAccountLabels();
+        RefreshClientMods();
     }
 
     // ---------------------------------------------------------------- Java
@@ -543,11 +544,12 @@ public partial class MainWindow : Window
     }
 
     // ---------------------------------------------------------------- 设置页
-    /// <summary>兼容旧的页签编号：0 启动 / 1 账号 / 2 日志 / 3 下载 / 4 模组 / 5 设置。</summary>
+    /// <summary>兼容旧的页签编号：0 启动 / 1 账号 / 2 日志 / 3 下载 / 4 模组检索 / 5 设置 / 6 客户端模组。</summary>
     private void ApplyTabIndex(int idx)
     {
-        switch (Math.Clamp(idx, 0, 5))
+        switch (Math.Clamp(idx, 0, 6))
         {
+            case 6: ShowPane("client"); Tabs.SelectedIndex = 2; break;
             case 1: ShowPane("account"); break;
             case 2: ShowPane("client"); Tabs.SelectedIndex = 1; break;
             case 3: ShowPane("download"); DownloadTabs.SelectedIndex = 0; break;
@@ -1443,6 +1445,246 @@ public partial class MainWindow : Window
     }
 
     private void OnOpenModsDirClick(object sender, RoutedEventArgs e) => OpenModsFolder();
+
+    /// <summary>自检用：把假客户端登记进当前配置并刷新列表（配置已由 SuppressSave 挡住不落盘）。</summary>
+    internal void TestRegisterClient(string versionId, string name, string mc, string loader)
+    {
+        _cfg.RegisterClient(versionId, name, mc, loader);
+        _ = RefreshVersionsAsync();
+    }
+
+    // ---------------------------------------------------------------- 客户端模组页
+    /// <summary>切到「模组」页签时重新扫一遍（用户可能在资源管理器里动过文件）。</summary>
+    private void OnClientTabChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(e.OriginalSource, Tabs)) return;
+        if (Tabs.SelectedIndex == 2) RefreshClientMods();
+    }
+
+    /// <summary>扫这个客户端的 mods 目录（隔离关掉时是游戏根目录的 mods，多客户端共用）。</summary>
+    private void RefreshClientMods()
+    {
+        if (ClientModList is null || LblClientModsStat is null) return;
+        if (_current is null)
+        {
+            ClientModList.ItemsSource = null;
+            LblClientModsStat.Text = "还没有选中客户端";
+            UpdateModButtons();
+            return;
+        }
+
+        string dir;
+        try { dir = ModsDir(); }
+        catch (Exception ex)
+        {
+            AppendLog("读取模组目录失败：" + ex.Message);
+            LblClientModsStat.Text = Notice.Error("读取模组目录", "再次点击刷新以重试");
+            UpdateModButtons();
+            return;
+        }
+
+        var mods = ModManager.List(dir);
+        ClientModList.ItemsSource = null;
+        ClientModList.ItemsSource = mods;
+        var enabled = mods.Count(m => m.Enabled);
+        var disabled = mods.Count - enabled;
+        var where = _cfg.Isolation
+            ? dir
+            : dir + "（版本隔离关闭，所有客户端共用）";
+        LblClientModsStat.Text = mods.Count == 0
+            ? "这个客户端还没有模组 · " + where
+            : "共 " + mods.Count + " 个 · 启用 " + enabled + " · 禁用 " + disabled + " · " + where;
+        UpdateModButtons();
+    }
+
+    private void UpdateModButtons()
+    {
+        if (BtnModDisable is null || BtnModEnable is null) return;
+        var picked = ClientModList?.SelectedItems?.Count ?? 0;
+        BtnModDisable.IsEnabled = picked > 0;
+        BtnModEnable.IsEnabled = picked > 0;
+    }
+
+    private void OnClientModSelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateModButtons();
+
+    private void OnModsRefreshClick(object sender, RoutedEventArgs e) => RefreshClientMods();
+
+    private void OnModSelectAllClick(object sender, RoutedEventArgs e)
+    {
+        if (ClientModList is null) return;
+        ClientModList.SelectAll();
+        UpdateModButtons();
+    }
+
+    private async void OnModDisableClick(object sender, RoutedEventArgs e) => await ToggleSelected(true);
+
+    private async void OnModEnableClick(object sender, RoutedEventArgs e) => await ToggleSelected(false);
+
+    /// <summary>
+    /// 批量禁用/启用。每个文件都会先判断当前状态：已经是目标状态的直接跳过，
+    /// 目标文件名被占用的不动并报出来。
+    /// </summary>
+    private async Task ToggleSelected(bool disable)
+    {
+        var picked = ClientModList?.SelectedItems?.Cast<ModManager.Entry>().ToList() ?? new List<ModManager.Entry>();
+        if (picked.Count == 0)
+        {
+            LblClientModsHint.Text = "先选中要处理的模组";
+            return;
+        }
+
+        var results = disable
+            ? ModManager.DisableMany(picked.Select(p => p.Path))
+            : ModManager.EnableMany(picked.Select(p => p.Path));
+        var changed = results.Count(r => r.Changed);
+        var skipped = results.Count(r => r.Outcome is ModManager.ToggleOutcome.AlreadyEnabled
+            or ModManager.ToggleOutcome.AlreadyDisabled);
+        var failed = results.Count(r => r.Outcome is ModManager.ToggleOutcome.NameTaken
+            or ModManager.ToggleOutcome.Failed);
+
+        foreach (var r in results.Where(r => !r.Changed))
+            AppendLog((disable ? "禁用" : "启用") + "跳过：" + r.Message);
+
+        RefreshClientMods();
+        // 客户端列表里的"N 个模组"跟着变；等它刷完再写提示，否则提示会被复查后的刷新覆盖
+        await RefreshVersionsAsync();
+        RefreshClientMods();
+
+        var action = disable ? "禁用" : "启用";
+        if (failed > 0)
+            LblClientModsHint.Text = action + " " + changed + " 个，跳过 " + skipped + " 个，" + failed + " 个没处理（见日志）";
+        else if (changed == 0)
+            LblClientModsHint.Text = "没有需要" + action + "的（选中的 " + skipped + " 个已经是这个状态）";
+        else
+            LblClientModsHint.Text = "已" + action + " " + changed + " 个" +
+                                    (skipped > 0 ? "，跳过 " + skipped + " 个（状态已经是这样）" : "");
+    }
+
+    // ---------------------------------------------------------------- 拖入 .mrpack
+    private bool _modpackBusy;
+
+    private static string[] DraggedFiles(DragEventArgs e)
+    {
+        try
+        {
+            if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return Array.Empty<string>();
+            return e.Data.GetData(DataFormats.FileDrop) as string[] ?? Array.Empty<string>();
+        }
+        catch (Exception) { return Array.Empty<string>(); }
+    }
+
+    private void OnShellDragOver(object sender, DragEventArgs e)
+    {
+        var pack = Modpack.FirstMrpack(DraggedFiles(e));
+        e.Effects = pack is null ? DragDropEffects.None : DragDropEffects.Copy;
+        e.Handled = true;
+        try
+        {
+            RootBorder.BorderBrush = (System.Windows.Media.Brush)FindResource(
+                pack is null ? "BorderStrong" : "Accent");
+        }
+        catch (Exception) { }
+    }
+
+    private void OnShellDragLeave(object sender, DragEventArgs e)
+    {
+        try { RootBorder.BorderBrush = (System.Windows.Media.Brush)FindResource("BorderStrong"); }
+        catch (Exception) { }
+    }
+
+    private async void OnShellDrop(object sender, DragEventArgs e)
+    {
+        e.Handled = true;
+        OnShellDragLeave(sender, e);
+        var files = DraggedFiles(e);
+        var pack = Modpack.FirstMrpack(files);
+        if (pack is null)
+        {
+            Notify("只认 .mrpack 整合包文件", "Warn");
+            return;
+        }
+        if (files.Length > 1)
+            AppendLog("一次拖进来 " + files.Length + " 个文件，只用第一个整合包：" + Path.GetFileName(pack));
+        await InstallModpackAsync(pack);
+    }
+
+    /// <summary>拖入整合包：先解析给用户确认，再装成新客户端。</summary>
+    private async Task InstallModpackAsync(string packPath)
+    {
+        if (_modpackBusy)
+        {
+            Notify("上一个整合包还在装，等它装完再拖", "Warn", 6);
+            return;
+        }
+
+        Modpack.PackInfo info;
+        try
+        {
+            info = Modpack.Read(packPath);
+        }
+        catch (Exception ex)
+        {
+            AppendLog("读取整合包失败：" + ex.Message);
+            SetStatus(Notice.Error("读取整合包", "换一个整合包文件重新拖入以重试"), false);
+            Notify("这个文件不是可用的整合包", "Err", 7);
+            return;
+        }
+
+        var ok = await AskAsync("安装整合包「" + info.Name + "」",
+            info.Detail + Environment.NewLine + Environment.NewLine +
+            "按包里的内容装成一个新客户端，已有的客户端不受影响。",
+            "安装", "取消");
+        if (!ok) return;
+
+        _modpackBusy = true;
+        BtnLaunch.IsEnabled = false;
+        try
+        {
+            var javaExe = _javaExe;
+            if (string.IsNullOrEmpty(javaExe))
+                javaExe = JavaFinder.Find(_cfg.JavaPath, _cfg.GameDir, 21).exe;
+
+            var progress = new Progress<InstallProgress>(p =>
+            {
+                SetStatus(p.Stage, true);
+                Bar.Visibility = Visibility.Visible;
+                Bar.Value = Math.Clamp(p.Fraction, 0, 1) * 100;
+            });
+
+            var result = await Modpack.InstallAsync(_cfg, packPath, _cfg.DownloadThreads, javaExe,
+                progress, AppendLog, CancellationToken.None);
+
+            await RefreshVersionsAsync();
+            var made = _all.FirstOrDefault(x =>
+                string.Equals(x.Id, result.VersionId, StringComparison.OrdinalIgnoreCase));
+            if (made is not null)
+            {
+                ShowVersion(made);
+                VersionList.SelectedItem = made;
+            }
+            ShowPane("client");
+            Tabs.SelectedIndex = 0;
+            SetStatus("整合包「" + result.ClientName + "」安装完成", false);
+            Notify("整合包「" + result.ClientName + "」安装完成", "Ok", 8);
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus("已取消", false);
+        }
+        catch (Exception ex)
+        {
+            AppendLog("安装整合包失败：" + ex.Message);
+            SetStatus(Notice.Error("安装整合包", "重新拖入整合包以重试"), false);
+            Notify("整合包没装成，日志里有详情", "Err", 8);
+        }
+        finally
+        {
+            _modpackBusy = false;
+            BtnLaunch.IsEnabled = true;
+            Bar.Visibility = Visibility.Collapsed;
+            Bar.Value = 0;
+        }
+    }
 
     // ---------------------------------------------------------------- 模组页
     private string SelectedSortKey =>
