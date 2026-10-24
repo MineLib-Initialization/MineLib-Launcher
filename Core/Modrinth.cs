@@ -23,7 +23,7 @@ public sealed class ModHit
     public string Meta => string.Join(" · ", new[] { License, Categories }.Where(s => !string.IsNullOrEmpty(s)));
 
     /// <summary>图标：按 URL 缓存已解码的缩略图（列表翻页时不再重复请求/解码大图）。</summary>
-    public System.Windows.Media.ImageSource? Icon => ModIconCache.Get(IconUrl);
+    public System.Windows.Media.ImageSource? Icon => ModIconCache.Get(IconUrl, Title);
 }
 
 public sealed class ModFile
@@ -48,37 +48,84 @@ internal static class ModIconCache
     private static readonly object Lock = new();
     private const int MaxEntries = 400;
 
-    public static System.Windows.Media.ImageSource? Get(string url)
+    public static System.Windows.Media.ImageSource? Get(string url, string title = "")
     {
-        if (string.IsNullOrWhiteSpace(url)) return null;
+        var key = string.IsNullOrWhiteSpace(url) ? "#" + title : url;
         lock (Lock)
         {
-            if (Cache.TryGetValue(url, out var hit)) return hit;
+            if (Cache.TryGetValue(key, out var hit)) return hit;
         }
 
         System.Windows.Media.ImageSource? img = null;
-        try
+        if (!string.IsNullOrWhiteSpace(url))
         {
-            var bmp = new System.Windows.Media.Imaging.BitmapImage();
-            bmp.BeginInit();
-            bmp.UriSource = new Uri(url, UriKind.Absolute);
-            bmp.DecodePixelWidth = 64;                       // 只要缩略图，别解码原图
-            bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-            bmp.EndInit();
-            bmp.Freeze();                                    // 冻结后可跨线程复用
-            img = bmp;
+            try
+            {
+                var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = new Uri(url, UriKind.Absolute);
+                bmp.DecodePixelWidth = 64;                   // 只要缩略图，别解码原图
+                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();                                // 冻结后可跨线程复用
+                // Modrinth 现在大量给 WebP，部分系统上 WIC 解出来只有 1x1（等于空白）。
+                // 这种情况按下面的占位图处理，别在界面上留一个空格子。
+                img = bmp.PixelWidth > 1 && bmp.PixelHeight > 1 ? bmp : null;
+            }
+            catch (Exception)
+            {
+                img = null;
+            }
         }
-        catch (Exception)
-        {
-            img = null;
-        }
+        img ??= Placeholder(title);
 
         lock (Lock)
         {
             if (Cache.Count >= MaxEntries) Cache.Clear();     // 简单粗暴的容量控制
-            Cache[url] = img;
+            Cache[key] = img;
         }
         return img;
+    }
+
+    /// <summary>没有可用图标时画一个色块 + 首字母，比空格子好看，也不依赖任何图片解码。</summary>
+    private static System.Windows.Media.ImageSource Placeholder(string title)
+    {
+        var name = string.IsNullOrWhiteSpace(title) ? "?" : title.Trim();
+        var palette = new[]
+        {
+            "#4F8EF7", "#7C5CFC", "#2FA36B", "#E0803A", "#D9534F", "#2E9CB0", "#8E6BD8", "#5A6B8C"
+        };
+        var sum = 0;
+        foreach (var ch in name) sum = (sum * 31 + ch) & 0x7FFFFFFF;
+        var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter
+            .ConvertFromString(palette[sum % palette.Length])!;
+
+        var initials = new string(name
+            .Split(new[] { ' ', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries)
+            .Take(2)
+            .Select(w => char.ToUpperInvariant(w[0]))
+            .ToArray());
+        if (initials.Length == 0) initials = "?";
+
+        const int size = 64;
+        var visual = new System.Windows.Media.DrawingVisual();
+        using (var dc = visual.RenderOpen())
+        {
+            dc.DrawRoundedRectangle(new System.Windows.Media.SolidColorBrush(color), null,
+                new System.Windows.Rect(0, 0, size, size), 14, 14);
+            var text = new System.Windows.Media.FormattedText(initials,
+                System.Globalization.CultureInfo.CurrentUICulture,
+                System.Windows.FlowDirection.LeftToRight,
+                new System.Windows.Media.Typeface("Segoe UI Semibold"), 26,
+                System.Windows.Media.Brushes.White, 1.0);
+            dc.DrawText(text, new System.Windows.Point((size - text.Width) / 2,
+                (size - text.Height) / 2));
+        }
+        var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(size, size, 96, 96,
+            System.Windows.Media.PixelFormats.Pbgra32);
+        rtb.Render(visual);
+        rtb.Freeze();
+        return rtb;
     }
 }
 
