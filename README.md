@@ -108,9 +108,10 @@ SetStatus(Notice.Error("下载游戏文件", "再次点击下载以重试"), fal
 | `--selftest-client` | 客户端改名、依赖检测 |
 | `--selftest-auth` | 离线 UUID 与 Java 一致、注入器就位、错误提示 |
 | `--selftest-javafind` | Java 探测与缓存、Adoptium 版本映射 |
-| `--selftest-modrinth` | 检索、文件列表、下载落盘与文件名消毒 |
+| `--selftest-modrinth` | 检索、文件列表、下载落盘与文件名消毒、图标可显示（不能残留 WebP） |
 | `--selftest-log` | 日志批量刷盘的吞吐与完整性 |
 | `--selftest-crash` | 全局异常兜底与崩溃日志 |
+| `--selftest-close` | 开窗再关窗，断言没有异常落进崩溃日志（标题栏按钮配色写错曾在这里炸过） |
 
 其它：`--selftest`（加载器/模组接口）、`--selftest-download`（下载测速）、`--selftest-java <主版本>`（自动获取 Java）、`--selftest-create`（装一个客户端到临时目录）、`--selftest-source`（下载源逐项验证）、`--mkpatch <旧exe> <新exe> <补丁>`（生成增量补丁）、`--shot <页签> <查询> <输出.png>`（离屏渲染界面图）。
 
