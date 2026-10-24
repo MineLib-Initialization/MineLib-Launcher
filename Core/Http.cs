@@ -107,22 +107,40 @@ public static class Http
 
     /// <summary>单文件下载。大文件自动分段并发，失败重试两次。</summary>
     public static async Task<bool> DownloadAsync(string url, string dest, string? sha1 = null,
-        IProgress<(long done, long total)>? progress = null, CancellationToken ct = default)
+        IProgress<(long done, long total)>? progress = null, CancellationToken ct = default,
+        long expectedSize = 0, string? altUrl = null)
     {
         for (var attempt = 0; ; attempt++)
         {
-            var ok = await DownloadOnceAsync(url, dest, sha1, progress, ct).ConfigureAwait(false);
+            var ok = await DownloadOnceAsync(url, dest, sha1, progress, ct, expectedSize).ConfigureAwait(false);
             if (ok) return true;
             ct.ThrowIfCancellationRequested();
-            if (attempt >= 2) return false;
+            if (attempt >= 2) break;
             try { await Task.Delay(300 * (attempt + 1), ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { throw; }
         }
+
+        // 主地址彻底不行了再换备用地址（镜像缺文件、镜像临时抽风都靠这条兜底）
+        if (!string.IsNullOrEmpty(altUrl) &&
+            !string.Equals(altUrl, url, StringComparison.OrdinalIgnoreCase))
+            return await DownloadOnceAsync(altUrl!, dest, sha1, progress, ct, expectedSize)
+                .ConfigureAwait(false);
+        return false;
     }
 
+    // 同一个目标文件可能被两个批次同时请求（比如"创建客户端"和"启动游戏"同时补文件），
+    // 各自写自己的 .part 再 Move 会互相踩，所以按目标路径加互斥。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> DestGates =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static SemaphoreSlim GateFor(string dest) =>
+        DestGates.GetOrAdd(dest, _ => new SemaphoreSlim(1, 1));
+
     private static async Task<bool> DownloadOnceAsync(string url, string dest, string? sha1,
-        IProgress<(long done, long total)>? progress, CancellationToken ct)
+        IProgress<(long done, long total)>? progress, CancellationToken ct, long expectedSize = 0)
     {
+        var gate = GateFor(dest);
+        await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
@@ -132,11 +150,26 @@ public static class Http
             var tmp = dest + ".part";
             TryDelete(tmp);
 
-            var (size, ranges) = await ProbeAsync(url, ct).ConfigureAwait(false);
+            // 每个文件都先发一次 HEAD 纯属浪费：资源文件几千个，等于凭空多一倍请求，
+            // 高并发下这些多余的请求会把连接池挤满、把服务器惹到重置流。
+            // 清单里给了大小（而且有校验值可以兜底）就直接下，只有"大小未知"时才去问。
+            var (size, ranges) = expectedSize > 0 && sha1 is not null
+                ? (expectedSize, true)
+                : await ProbeAsync(url, ct).ConfigureAwait(false);
 
-            var ok = size >= RangeThreshold && ranges
+            var useRanges = size >= RangeThreshold && ranges;
+            var ok = useRanges
                 ? await DownloadRangesAsync(url, tmp, size, progress, ct).ConfigureAwait(false)
                 : await DownloadStreamAsync(url, tmp, progress, ct).ConfigureAwait(false);
+
+            // 服务器不支持 Range 时会忽略分段、每次都返回整份文件：这种情况下大小照样对得上，
+            // 只有校验值能拆穿。拆穿了就退回单流再下一次（这里已经算过一次哈希，后面不再重复算）。
+            if (useRanges && ok && sha1 is not null && Sha1Of(tmp) != sha1)
+            {
+                TryDelete(tmp);
+                ok = await DownloadStreamAsync(url, tmp, progress, ct).ConfigureAwait(false);
+            }
+
             if (!ok)
             {
                 TryDelete(tmp);
@@ -160,6 +193,10 @@ public static class Http
         catch (Exception)
         {
             return false;
+        }
+        finally
+        {
+            gate.Release();
         }
     }
 
@@ -298,7 +335,7 @@ public static class Http
         return true;
     }
 
-    public sealed record DownloadTask(string Url, string Dest, string? Sha1, long Size);
+    public sealed record DownloadTask(string Url, string Dest, string? Sha1, long Size, string? AltUrl = null);
 
     public sealed record BulkProgress(int FilesDone, int FilesTotal, long BytesDone, long BytesTotal,
         double BytesPerSecond)
@@ -338,7 +375,7 @@ public static class Http
     /// 汇总进度（已完成文件数 + 总字节 + 实时速度）。已存在的文件直接跳过，失败会重试。
     /// </summary>
     public static async Task<(int ok, int failed)> DownloadManyAsync(IReadOnlyList<DownloadTask> tasks,
-        int concurrency, IProgress<BulkProgress>? progress, CancellationToken ct)
+        int concurrency, IProgress<BulkProgress>? progress, CancellationToken ct, Action<string>? log = null)
     {
         if (tasks.Count == 0) return (0, 0);
         concurrency = Math.Clamp(concurrency, 1, 64);
@@ -384,6 +421,7 @@ public static class Http
 
         var semaphore = new SemaphoreSlim(concurrency, concurrency);
         var workers = new List<Task>(total);
+        var failedTasks = new System.Collections.Concurrent.ConcurrentBag<DownloadTask>();
 
         try
         {
@@ -408,7 +446,8 @@ public static class Http
                 {
                     try
                     {
-                        var fine = await DownloadAsync(t.Url, t.Dest, t.Sha1, null, ct).ConfigureAwait(false);
+                        var fine = await DownloadAsync(t.Url, t.Dest, t.Sha1, null, ct, t.Size, t.AltUrl)
+                            .ConfigureAwait(false);
                         if (fine)
                         {
                             Interlocked.Increment(ref ok);
@@ -416,7 +455,7 @@ public static class Http
                         }
                         else
                         {
-                            Interlocked.Increment(ref failed);
+                            failedTasks.Add(t);
                         }
                     }
                     catch (OperationCanceledException)
@@ -425,7 +464,7 @@ public static class Http
                     }
                     catch (Exception)
                     {
-                        Interlocked.Increment(ref failed);
+                        failedTasks.Add(t);
                     }
                     finally
                     {
@@ -446,6 +485,55 @@ public static class Http
             try { await timer.ConfigureAwait(false); } catch (Exception) { }
             try { await Task.WhenAll(workers).ConfigureAwait(false); } catch (Exception) { }
             semaphore.Dispose();
+        }
+        Report();
+        failed = failedTasks.Count;
+
+        // 高并发下偶发失败（连接被重置、文件被占用）不该直接算结束：
+        // 失败项用低并发再补一次，避免"最后漏掉几个文件"。
+        if (failedTasks.Count > 0 && !ct.IsCancellationRequested)
+        {
+            var retryList = failedTasks.ToList();
+            log?.Invoke("有 " + retryList.Count + " 个文件下载失败，正在低并发重试…");
+            failedTasks = new System.Collections.Concurrent.ConcurrentBag<DownloadTask>();
+            var retryGate = new SemaphoreSlim(Math.Min(4, concurrency), Math.Min(4, concurrency));
+            var retryWorkers = new List<Task>(retryList.Count);
+            foreach (var t in retryList)
+            {
+                await retryGate.WaitAsync(ct).ConfigureAwait(false);
+                retryWorkers.Add(Task.Run(async () =>
+                {
+                    try
+                    {
+                        if (await DownloadAsync(t.Url, t.Dest, t.Sha1, null, ct, t.Size, t.AltUrl)
+                                .ConfigureAwait(false))
+                            Interlocked.Increment(ref ok);
+                        else
+                            failedTasks.Add(t);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception) { failedTasks.Add(t); }
+                    finally { retryGate.Release(); }
+                }, ct));
+            }
+            try { await Task.WhenAll(retryWorkers).ConfigureAwait(false); }
+            finally { retryGate.Dispose(); }
+            failed = failedTasks.Count;
+        }
+
+        // 最后逐个核对：文件到底在不在（大小对得上）。这一步不看返回值，直接看磁盘。
+        var stillMissing = new List<string>();
+        foreach (var t in list)
+        {
+            var fi = new FileInfo(t.Dest);
+            if (!fi.Exists || (t.Size > 0 && fi.Length != t.Size))
+                stillMissing.Add(t.Dest);
+        }
+        if (stillMissing.Count > 0)
+        {
+            failed = Math.Max(failed, stillMissing.Count);
+            log?.Invoke("最终核对仍有 " + stillMissing.Count + " 个文件不在位：" +
+                        string.Join("，", stillMissing.Take(5).Select(p => Path.GetFileName(p))));
         }
         Report();
         return (ok, failed);

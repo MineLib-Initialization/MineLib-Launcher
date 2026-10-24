@@ -62,17 +62,32 @@ public static class Installer
     public static string LibPath(JsonObject lib)
     {
         var path = lib["downloads"]?["artifact"]?["path"]?.ToString();
-        return string.IsNullOrEmpty(path) ? MavenPath(lib["name"]?.ToString() ?? "") : path;
+        if (!string.IsNullOrEmpty(path)) return path;
+        // 官方清单里有些库压根没有主 jar：lwjgl-platform / jinput-platform / twitch-platform 这类
+        // 条目只有 natives classifiers，按 name 硬拼出来的地址在官方源上是 404（镜像上也是）。
+        // 以前这里无脑 MavenPath，于是 1.7.10 这类老版本永远装不上（"依赖库有 4 个文件下载失败"）。
+        // 只认「有 classifiers 且没有自己的 maven 根」这种形状，避免误伤 Forge 那种 downloads 为空、
+        // 但确实要靠 url + name 拼地址的库。
+        if (lib["downloads"] is JsonObject dl && dl["artifact"] is null &&
+            dl["classifiers"] is JsonObject cls && cls.Count > 0 &&
+            string.IsNullOrWhiteSpace(lib["url"]?.ToString()))
+            return "";
+        return MavenPath(lib["name"]?.ToString() ?? "");
     }
 
     /// <summary>
     /// 库的真实下载地址。官方 vanilla 库带 downloads.artifact.url；
     /// Fabric / Forge / NeoForge 的库只有 url（maven 根）+ name，必须自己拼。
     /// </summary>
-    public static string? LibUrl(JsonObject lib)
+    public static string? LibUrl(JsonObject lib) => LibUrls(lib).url;
+
+    /// <summary>
+    /// 库的地址，同时给出「当前下载源」和「官方源」两个版本：镜像缺文件时用官方地址兜底。
+    /// </summary>
+    public static (string? url, string? official) LibUrls(JsonObject lib)
     {
         var path = LibPath(lib);
-        if (string.IsNullOrEmpty(path)) return null;
+        if (string.IsNullOrEmpty(path)) return (null, null);
 
         var artUrl = lib["downloads"]?["artifact"]?["url"]?.ToString();
         var mavenRoot = lib["url"]?.ToString();
@@ -83,7 +98,9 @@ public static class Installer
                 : mavenRoot!.TrimEnd('/') + "/" + path.Replace('\\', '/');
 
         // 交给当前下载源决定最终地址（镜像只覆盖 Minecraft 自己的库，其它私库原样返回）
-        return DownloadSources.Current.Library(resolved, path);
+        var official = DownloadSource.Official.Library(resolved, path);
+        var current = DownloadSources.Current.Library(resolved, path);
+        return (current, string.Equals(current, official, StringComparison.OrdinalIgnoreCase) ? null : official);
     }
 
     /// <summary>natives 的 classifier 键（natives-windows-${arch} 这类占位符要替换）。</summary>
@@ -100,13 +117,13 @@ public static class Installer
     {
         var list = new List<Http.DownloadTask>();
 
-        var url = LibUrl(lib);
+        var (url, official) = LibUrls(lib);
         var path = LibPath(lib);
         if (url is not null && path.Length > 0)
         {
             var art = lib["downloads"]?["artifact"];
             list.Add(new Http.DownloadTask(url, Path.Combine(gameDir, "libraries", path),
-                art?["sha1"]?.ToString(), art?["size"]?.GetValue<long>() ?? 0));
+                art?["sha1"]?.ToString(), art?["size"]?.GetValue<long>() ?? 0, official));
         }
 
         var key = NativeKey(lib);
@@ -115,8 +132,16 @@ public static class Installer
             var clsPath = cls["path"]?.ToString();
             var clsUrl = cls["url"]?.ToString();
             if (!string.IsNullOrEmpty(clsPath) && !string.IsNullOrEmpty(clsUrl))
-                list.Add(new Http.DownloadTask(clsUrl, Path.Combine(gameDir, "libraries", clsPath),
-                    cls["sha1"]?.ToString(), cls["size"]?.GetValue<long>() ?? 0));
+            {
+                // natives 也走同一套「镜像优先、官方兜底」
+                var clsOfficial = DownloadSource.Official.Library(clsUrl, clsPath);
+                var clsCurrent = DownloadSources.Current.Library(clsUrl, clsPath) ?? clsUrl;
+                var clsAlt = string.Equals(clsCurrent, clsOfficial, StringComparison.OrdinalIgnoreCase)
+                    ? null
+                    : clsOfficial;
+                list.Add(new Http.DownloadTask(clsCurrent, Path.Combine(gameDir, "libraries", clsPath),
+                    cls["sha1"]?.ToString(), cls["size"]?.GetValue<long>() ?? 0, clsAlt));
+            }
         }
         return list;
     }
@@ -228,6 +253,7 @@ public static class Installer
     {
         var url = merged["downloads"]?["client"]?["url"]?.ToString();
         var sha1 = merged["downloads"]?["client"]?["sha1"]?.ToString();
+        var jarSize = merged["downloads"]?["client"]?["size"]?.GetValue<long>() ?? 0;
         if (string.IsNullOrEmpty(url)) return;
         var dest = ClientJarDest(gameDir, vid);
         // 镜像按「版本 id」给客户端 jar，版本 id 要用继承链最底下那个原版版本
@@ -236,9 +262,9 @@ public static class Installer
         {
             var rootId = RootVersionId(gameDir, vid);
             var alt = mirror(rootId);
-            if (await Http.DownloadAsync(alt, dest, sha1, progress, ct).ConfigureAwait(false)) return;
+            if (await Http.DownloadAsync(alt, dest, sha1, progress, ct, jarSize).ConfigureAwait(false)) return;
         }
-        if (!await Http.DownloadAsync(url, dest, sha1, progress, ct).ConfigureAwait(false))
+        if (!await Http.DownloadAsync(url, dest, sha1, progress, ct, jarSize).ConfigureAwait(false))
             throw new InvalidOperationException("客户端 jar 下载失败：" + url);
     }
 
@@ -254,6 +280,22 @@ public static class Installer
             cur = parent;
         }
         return cur;
+    }
+
+    /// <summary>批量下载失败后，把没落地的文件名捞出来，方便定位是哪几个文件。</summary>
+    private static string DescribeMissing(IReadOnlyList<Http.DownloadTask> tasks, int max = 5)
+    {
+        var names = new List<string>();
+        foreach (var t in tasks)
+        {
+            var fi = new FileInfo(t.Dest);
+            if (!fi.Exists || (t.Size > 0 && fi.Length != t.Size))
+            {
+                names.Add(Path.GetFileName(t.Dest));
+                if (names.Count >= max) break;
+            }
+        }
+        return names.Count == 0 ? "" : "，缺：" + string.Join("、", names);
     }
 
     public static async Task EnsureLibrariesAsync(string gameDir, JsonObject merged, int threads,
@@ -272,7 +314,8 @@ public static class Installer
             .ConfigureAwait(false);
         if (failed > 0)
             throw new InvalidOperationException("依赖库有 " + failed + " 个文件下载失败（成功 " + ok +
-                                                " / 共 " + tasks.Count + "），请重试或换下载源");
+                                                " / 共 " + tasks.Count + "）" + DescribeMissing(tasks) +
+                                                "，请重试或换下载源");
     }
 
     public static async Task EnsureAssetsAsync(string gameDir, JsonObject merged, int threads,
@@ -283,7 +326,8 @@ public static class Installer
         if (string.IsNullOrEmpty(indexId) || string.IsNullOrEmpty(indexUrl)) return;
 
         var idxPath = Path.Combine(gameDir, "assets", "indexes", indexId + ".json");
-        await Http.DownloadAsync(indexUrl, idxPath, merged["assetIndex"]?["sha1"]?.ToString(), null, ct)
+        await Http.DownloadAsync(indexUrl, idxPath, merged["assetIndex"]?["sha1"]?.ToString(), null, ct,
+                merged["assetIndex"]?["size"]?.GetValue<long>() ?? 0)
             .ConfigureAwait(false);
         if (!File.Exists(idxPath)) return;
 
@@ -303,7 +347,8 @@ public static class Installer
             .ConfigureAwait(false);
         if (failed > 0)
             throw new InvalidOperationException("资源文件有 " + failed + " 个下载失败（成功 " + ok +
-                                                " / 共 " + tasks.Count + "），请重试或换下载源");
+                                                " / 共 " + tasks.Count + "）" + DescribeMissing(tasks) +
+                                                "，请重试或换下载源");
     }
 
     /// <summary>

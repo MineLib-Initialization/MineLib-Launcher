@@ -84,6 +84,7 @@ Windows 上的 Minecraft Java 版启动器，C# / .NET 8 / WPF，界面自绘（
 | `--selftest-migrate` | 旧多目录数据合并；版本改名连带更新 jar 与 inheritsFrom |
 | `--selftest-update` | 更新替换脚本：成功替换 / 目标被占用时保留暂存 |
 | `--selftest-http` | 下载去重、取消后不留 .part、sha1 校验 |
+| `--selftest-http64` | 高并发下载压测：500 个资源对象 × 64 并发跑两轮 + 两批任务并发抢同一批文件，断言文件齐全、哈希正确、无残留 .part |
 | `--selftest-assets` | 资源对象缺失检测、1.6 及更早的 virtual 资源铺开 |
 | `--selftest-loader` | 安装器结果识别、Fabric 真实安装 |
 | `--selftest-args` | 启动参数占位符替换、超长 classpath 走 @argfile |
