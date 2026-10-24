@@ -71,6 +71,14 @@ public static class Http
         return JsonNode.Parse(text) ?? new JsonObject();
     }
 
+    /// <summary>取原始字节（图标这类二进制内容用）。</summary>
+    public static async Task<byte[]> GetBytesAsync(string url, CancellationToken ct = default)
+    {
+        using var resp = await Client.GetAsync(url, ct).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        return await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+    }
+
     public static async Task<string> GetStringAsync(string url, CancellationToken ct = default)
     {
         using var resp = await Client.GetAsync(url, ct).ConfigureAwait(false);
