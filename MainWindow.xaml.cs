@@ -96,6 +96,15 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         VersionList.ItemsSource = _view;
+        // Esc 关掉界面内确认卡片（系统对话框那套键位习惯保留）
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == System.Windows.Input.Key.Escape && AskLayer.Visibility == Visibility.Visible)
+            {
+                CloseAsk(false);
+                e.Handled = true;
+            }
+        };
         TxtMemory.Text = _cfg.MemoryMb.ToString();
         TxtJvm.Text = _cfg.JvmArgs;
         ChkIsolation.IsChecked = _cfg.Isolation;
@@ -185,6 +194,22 @@ public partial class MainWindow : Window
                     enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
                     using var fs = File.Create(outPath);
                     enc.Save(fs);
+                }
+
+                // 截图时可以强制显示界面内提示/确认卡片，用来核对样式
+                switch (Environment.GetEnvironmentVariable("MINELIB_SHOT_OVERLAY"))
+                {
+                    case "notice":
+                        Notify("已更新到 v" + Updates.Current, "Ok", 0);
+                        break;
+                    case "ask":
+                        _ = AskAsync("移除客户端「1.21.11 Fabric」",
+                            "版本：1.21.11-Fabric" + Environment.NewLine +
+                            "目录：D:\\Games\\MineLib\\.minecraft\\versions\\1.21.11-Fabric" + Environment.NewLine + Environment.NewLine +
+                            "点「移除」先从列表里去掉，之后会再问要不要删磁盘文件。libraries 与 assets 是共用的，不会被删。",
+                            "移除", "取消", danger: true);
+                        await Task.Delay(400);
+                        break;
                 }
 
                 // 先画一遍：模组图标这类懒加载的图片在第一次渲染时才开始取，
@@ -634,13 +659,13 @@ public partial class MainWindow : Window
                 .Sum(f => f.Length) / 1048576.0;
         }
         catch (Exception) { }
-        var ok = MessageBox.Show(
+        var ok = await AskAsync("迁移到启动器目录",
             "把当前客户端文件夹搬到启动器目录？" + Environment.NewLine + Environment.NewLine +
             "从：" + src + Environment.NewLine +
             "到：" + dst + Environment.NewLine + Environment.NewLine +
             "约 " + Math.Round(sizeMb) + " MB。同盘直接改名；目标已存在则按文件合并，不会覆盖已有的。",
-            "迁移到启动器目录", MessageBoxButton.YesNo, MessageBoxImage.Question);
-        if (ok != MessageBoxResult.Yes) return;
+            "迁移", "取消");
+        if (!ok) return;
 
         if (_proc is { Running: true })
         {
@@ -670,6 +695,7 @@ public partial class MainWindow : Window
             RefreshRootCombo();
             await RefreshVersionsAsync();
             SetStatus("已迁移到 " + moved, false);
+            Notify("已迁移到 " + moved, "Ok");
         }
         catch (Exception ex)
         {
@@ -1110,6 +1136,76 @@ public partial class MainWindow : Window
         SetStatus("已删除账号 " + a.Name, false);
     }
 
+    // ---------------------------------------------------------------- 界面内提示与确认
+    // 界面上不弹系统对话框：提示走顶部提示条，需要用户点头的走界面内卡片。
+    private CancellationTokenSource? _noticeCts;
+    private TaskCompletionSource<bool>? _askTcs;
+
+    /// <summary>顶部提示条。seconds &lt;= 0 表示不自动消失。</summary>
+    private void Notify(string text, string colorKey = "Accent", double seconds = 5)
+    {
+        NoticeText.Text = text;
+        try { NoticeStripe.Background = (System.Windows.Media.Brush)FindResource(colorKey); }
+        catch (Exception) { }
+        NoticeBar.Visibility = Visibility.Visible;
+        try { _noticeCts?.Cancel(); } catch (Exception) { }
+        if (seconds <= 0) return;
+        var cts = new CancellationTokenSource();
+        _noticeCts = cts;
+        _ = Task.Delay(TimeSpan.FromSeconds(seconds), cts.Token).ContinueWith(t =>
+        {
+            if (t.IsCanceled) return;
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (ReferenceEquals(_noticeCts, cts)) NoticeBar.Visibility = Visibility.Collapsed;
+            });
+        }, TaskScheduler.Default);
+    }
+
+    private void OnNoticeCloseClick(object sender, RoutedEventArgs e)
+    {
+        try { _noticeCts?.Cancel(); } catch (Exception) { }
+        NoticeBar.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>界面内确认卡片：返回用户是否点了确认按钮。cancel 传 null 就只有一个按钮。</summary>
+    private async Task<bool> AskAsync(string title, string body, string ok = "确定",
+        string? cancel = "取消", bool danger = false)
+    {
+        AskTitle.Text = title;
+        AskBody.Text = body;
+        BtnAskOk.Content = ok;
+        BtnAskOk.Style = (Style)FindResource(danger ? "DangerSolid" : "Primary");
+        BtnAskCancel.Content = cancel ?? "";
+        BtnAskCancel.Visibility = string.IsNullOrEmpty(cancel) ? Visibility.Collapsed : Visibility.Visible;
+        AskLayer.Visibility = Visibility.Visible;
+        _askTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = _askTcs;
+        try
+        {
+            BtnAskOk.Focus();
+            return await tcs.Task;
+        }
+        finally
+        {
+            AskLayer.Visibility = Visibility.Collapsed;
+            if (ReferenceEquals(_askTcs, tcs)) _askTcs = null;
+        }
+    }
+
+    private void CloseAsk(bool result)
+    {
+        var tcs = _askTcs;
+        _askTcs = null;
+        tcs?.TrySetResult(result);
+    }
+
+    private void OnAskOkClick(object sender, RoutedEventArgs e) => CloseAsk(true);
+    private void OnAskCancelClick(object sender, RoutedEventArgs e) => CloseAsk(false);
+
+    /// <summary>只有一个「知道了」按钮的提示（更新说明、异常提示这类）。</summary>
+    public Task AlertAsync(string title, string body) => AskAsync(title, body, "知道了", null);
+
     // ---------------------------------------------------------------- 更新
     private void ShowAppliedNotes()
     {
@@ -1117,11 +1213,11 @@ public partial class MainWindow : Window
         if (applied is null) return;
         var body = string.IsNullOrWhiteSpace(applied.Notes)
             ? "已更新到 v" + applied.Version + "。"
-            : "本次更新内容：" + Environment.NewLine + Environment.NewLine + applied.Notes;
+            : applied.Notes;
         AppendLog("已更新到 v" + applied.Version + "：" + applied.Notes);
         LblUpdateState.Text = "v" + applied.Version + " 已生效";
-        MessageBox.Show(body, "已更新到 v" + applied.Version + " (" + Updates.Current + ")",
-            MessageBoxButton.OK, MessageBoxImage.Information);
+        Notify("已更新到 v" + applied.Version, "Ok", 6);
+        _ = AlertAsync("已更新到 v" + applied.Version, body);
     }
 
     private Updates.UpdateInfo? _pendingUpdate;
@@ -1290,30 +1386,31 @@ public partial class MainWindow : Window
               "⚠ 还有 " + dependents.Count + " 个客户端继承它：" + string.Join("、", dependents.Take(5)) +
               (dependents.Count > 5 ? " 等" : "") + Environment.NewLine +
               "删掉这个版本后，它们会因为缺少父版本而无法启动。";
-        var first = MessageBox.Show(
-            "从列表里移除客户端「" + name + "」？" + Environment.NewLine + Environment.NewLine +
+        var first = await AskAsync("移除客户端「" + name + "」",
             "版本：" + _current.Id + Environment.NewLine + "目录：" + vdir + Environment.NewLine + Environment.NewLine +
-            "点「是」先移除，之后会再问要不要删磁盘文件。libraries 与 assets 是共用的，不会被删。" + dependNote,
-            "删除客户端", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        if (first != MessageBoxResult.Yes) return;
+            "点「移除」先从列表里去掉，之后会再问要不要删磁盘文件。libraries 与 assets 是共用的，不会被删。" +
+            dependNote, "移除", "取消", danger: true);
+        if (!first) return;
 
         _cfg.RemoveClient(_current.Id);
         if (string.Equals(_cfg.Version, _current.Id, StringComparison.OrdinalIgnoreCase)) _cfg.Version = "";
         _cfg.Save();
         await RefreshVersionsAsync();
         SetStatus("已移除客户端「" + name + "」", false);
+        Notify("已移除客户端「" + name + "」", "Ok");
 
         if (!Directory.Exists(vdir)) return;
-        var second = MessageBox.Show(
-            "连磁盘上的版本文件一起删掉吗？" + Environment.NewLine + Environment.NewLine + vdir +
-            Environment.NewLine + Environment.NewLine + "这个版本的存档、模组、配置都会没有，不可恢复。",
-            "删除版本文件？", MessageBoxButton.YesNo, MessageBoxImage.Exclamation);
-        if (second != MessageBoxResult.Yes) return;
+        var second = await AskAsync("删除版本文件？",
+            vdir + Environment.NewLine + Environment.NewLine +
+            "这个版本的存档、模组、配置都会没有，不可恢复。",
+            "删除文件", "保留文件", danger: true);
+        if (!second) return;
         try
         {
             Directory.Delete(vdir, true);
             await RefreshVersionsAsync();
             SetStatus("已删除 " + vdir, false);
+            Notify("已删除版本文件", "Ok");
         }
         catch (Exception ex)
         {
