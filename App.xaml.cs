@@ -28,10 +28,14 @@ public partial class App : Application
             // 主界面在就走界面内提示（不弹系统对话框）；连窗口都没起来才用兜底窗口
             try
             {
-                if (Current?.MainWindow is MainWindow win)
+                var dispatcher = Current?.Dispatcher;
+                if (Current?.MainWindow is MainWindow win && dispatcher is not null &&
+                    !dispatcher.HasShutdownStarted && !dispatcher.HasShutdownFinished)
                 {
-                    win.Dispatcher.BeginInvoke(new Action(() =>
+                    dispatcher.BeginInvoke(new Action(() =>
                     {
+                        // 已经在关窗就别再弹提示了，用户什么都做不了
+                        if (!win.IsVisible) return;
                         _ = win.AlertAsync("本次操作出现错误",
                             "再次执行刚才的操作以重试。" + Environment.NewLine + Environment.NewLine +
                             "日志：" + (path ?? ""));
@@ -228,6 +232,50 @@ public partial class App : Application
                 try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
             }
             await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-http64.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
+        // 关闭自检：开窗再关掉，确认没有异常落进崩溃日志（标题栏关闭按钮曾经因配色写错而崩）
+        if (e.Args.Contains("--selftest-close"))
+        {
+            var sb = new StringBuilder();
+            var crashDir = CrashReporter.LogDir;
+            int CountCrashes() => Directory.Exists(crashDir)
+                ? Directory.GetFiles(crashDir, "crash-*.log").Length
+                : 0;
+            var before = CountCrashes();
+            try
+            {
+                var win = new MainWindow();
+                win.Show();
+                // 让布局与首帧渲染真的跑一遍，异常才会暴露出来
+                for (var i = 0; i < 2; i++)
+                {
+                    var frame = new System.Windows.Threading.DispatcherFrame();
+                    var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                    timer.Tick += (_, _) => { timer.Stop(); frame.Continue = false; };
+                    timer.Start();
+                    System.Windows.Threading.Dispatcher.PushFrame(frame);
+                }
+                win.Close();
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("关闭自检抛异常：" + ex.Message);
+            }
+            // 关闭后再等一会儿，让渲染回调与后台清理把异常都吐出来
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                timer.Tick += (_, _) => { timer.Stop(); frame.Continue = false; };
+                timer.Start();
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+            }
+            var after = CountCrashes();
+            sb.AppendLine($"崩溃日志数：{before} → {after}（应保持不变）");
+            var ok = after <= before && !sb.ToString().Contains("关闭自检抛异常");
+            sb.AppendLine(ok ? "CLOSE SELFTEST PASS" : "CLOSE SELFTEST FAIL");
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-close.txt"), sb.ToString());
             Shutdown();
             return;
         }
