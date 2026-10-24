@@ -118,6 +118,114 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 高并发下载压力自检：64 并发下不能漏文件
+        if (e.Args.Contains("--selftest-http64"))
+        {
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-h64-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                Directory.CreateDirectory(work);
+                // 拿 1.21.1 的资源索引，取前 500 个对象
+                var manifest = await Http.GetJsonAsync(Installer.ManifestUrl);
+                var entry = (manifest["versions"] as System.Text.Json.Nodes.JsonArray)!
+                    .OfType<System.Text.Json.Nodes.JsonObject>()
+                    .First(v => v["id"]?.ToString() == "1.21.1");
+                var raw = (System.Text.Json.Nodes.JsonObject)await Http.GetJsonAsync(entry["url"]!.ToString());
+                var idxPath = Path.Combine(work, "index.json");
+                await Http.DownloadAsync(raw["assetIndex"]!["url"]!.ToString(), idxPath, null, null);
+                var index = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(idxPath));
+                var objects = (index?["objects"] as System.Text.Json.Nodes.JsonObject)!;
+
+                foreach (var round in new[] { 1, 2 })
+                {
+                    var dir = Path.Combine(work, "round" + round);
+                    var tasks = new List<Http.DownloadTask>();
+                    foreach (var kv in objects.Take(500))
+                    {
+                        var hash = kv.Value?["hash"]?.ToString() ?? "";
+                        if (hash.Length < 2) continue;
+                        tasks.Add(new Http.DownloadTask(
+                            DownloadSources.Current.AssetObject(hash),
+                            Path.Combine(dir, hash[..2], hash), hash,
+                            kv.Value?["size"]?.GetValue<long>() ?? 0));
+                    }
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var (ok, failed) = await Http.DownloadManyAsync(tasks, 64, null, CancellationToken.None);
+                    sw.Stop();
+
+                    var missing = 0;
+                    var badHash = 0;
+                    foreach (var t in tasks)
+                    {
+                        if (!File.Exists(t.Dest)) { missing++; continue; }
+                        if (!string.IsNullOrEmpty(t.Sha1) && Http.Sha1Of(t.Dest) != t.Sha1) badHash++;
+                    }
+                    sb.AppendLine($"第 {round} 轮：请求 {tasks.Count}，ok={ok} failed={failed} " +
+                                  $"缺失={missing} 哈希不符={badHash} 用时={sw.Elapsed.TotalSeconds:0.0}s");
+                    try { Directory.Delete(dir, true); } catch (Exception) { }
+                }
+
+                // 第 3 轮：两批任务并发写同一批目标文件（安装和启动校验同时触发的真实场景），
+                // 并发 64 x 2，最后要求文件齐全、哈希正确、没有残留 .part
+                {
+                    var dir = Path.Combine(work, "round3");
+                    List<Http.DownloadTask> Make()
+                    {
+                        var ts = new List<Http.DownloadTask>();
+                        foreach (var kv in objects.Take(1000))
+                        {
+                            var hash = kv.Value?["hash"]?.ToString() ?? "";
+                            if (hash.Length < 2) continue;
+                            ts.Add(new Http.DownloadTask(
+                                DownloadSources.Current.AssetObject(hash),
+                                Path.Combine(dir, hash[..2], hash), hash,
+                                kv.Value?["size"]?.GetValue<long>() ?? 0));
+                        }
+                        return ts;
+                    }
+                    var batchA = Make();
+                    var batchB = Make();
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var runA = Http.DownloadManyAsync(batchA, 64, null, CancellationToken.None);
+                    var runB = Http.DownloadManyAsync(batchB, 64, null, CancellationToken.None);
+                    await Task.WhenAll(runA, runB);
+                    sw.Stop();
+                    var missing = 0;
+                    var badHash = 0;
+                    foreach (var t in batchA)
+                    {
+                        if (!File.Exists(t.Dest)) { missing++; continue; }
+                        if (!string.IsNullOrEmpty(t.Sha1) && Http.Sha1Of(t.Dest) != t.Sha1) badHash++;
+                    }
+                    var parts = Directory.Exists(dir)
+                        ? Directory.GetFiles(dir, "*.part", SearchOption.AllDirectories).Length
+                        : 0;
+                    sb.AppendLine($"第 3 轮（双批并发）：请求 {batchA.Count}，ok={runA.Result.ok}+{runB.Result.ok} " +
+                                  $"failed={runA.Result.failed}+{runB.Result.failed} 缺失={missing} " +
+                                  $"哈希不符={badHash} 残留part={parts} 用时={sw.Elapsed.TotalSeconds:0.0}s");
+                    try { Directory.Delete(dir, true); } catch (Exception) { }
+                }
+
+                var lines = sb.ToString().Split((char)10, StringSplitOptions.RemoveEmptyEntries);
+                // 每轮都要：没有失败、没有缺失、没有哈希不符；带 .part 统计的那轮还要求没有残留
+                var allGood = lines.All(l => l.Contains("failed=0") && l.Contains("缺失=0") &&
+                                              l.Contains("哈希不符=0")) &&
+                              lines.Where(l => l.Contains("残留part")).All(l => l.Contains("残留part=0"));
+                sb.AppendLine(allGood ? "HTTP64 SELFTEST PASS" : "HTTP64 SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("HTTP64 SELFTEST FAIL " + ex);
+            }
+            finally
+            {
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-http64.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // 日志写入器自检：批量刷盘后内容不能丢、行数要对得上
         if (e.Args.Contains("--selftest-log"))
         {
