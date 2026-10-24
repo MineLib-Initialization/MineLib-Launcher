@@ -175,14 +175,25 @@ public partial class MainWindow : Window
                 {
                     await Task.Delay(1800);
                 }
+                void Draw()
+                {
+                    var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                        (int)ActualWidth, (int)ActualHeight, 96, 96,
+                        System.Windows.Media.PixelFormats.Pbgra32);
+                    bmp.Render(this);
+                    var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                    enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
+                    using var fs = File.Create(outPath);
+                    enc.Save(fs);
+                }
+
+                // 先画一遍：模组图标这类懒加载的图片在第一次渲染时才开始取，
+                // 只画一次会截到空图标。画完等一会儿再画一遍，图就齐了。
                 await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
-                var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap(
-                    (int)ActualWidth, (int)ActualHeight, 96, 96,
-                    System.Windows.Media.PixelFormats.Pbgra32);
-                bmp.Render(this);
-                var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
-                enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
-                using (var fs = File.Create(outPath)) enc.Save(fs);
+                Draw();
+                await Task.Delay(tabIdx == 4 ? 2500 : 500);
+                await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+                Draw();
                 Close();
             };
         }
