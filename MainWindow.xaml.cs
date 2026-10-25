@@ -1978,7 +1978,7 @@ public partial class MainWindow : Window
         foreach (var b in new[] { BtnTabClient, BtnTabDownload, BtnTabAccount, BtnTabSettings })
         {
             var active = ReferenceEquals(b, button);
-            b.Foreground = active ? (System.Windows.Media.Brush)FindResource("Accent")
+            b.Foreground = active ? (System.Windows.Media.Brush)FindResource("AccentText")
                                   : (System.Windows.Media.Brush)FindResource("TextDim");
             b.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
         }

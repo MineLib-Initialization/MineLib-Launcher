@@ -18,9 +18,10 @@
   <Color x:Key="TextColor">#FF16181D</Color>
   <Color x:Key="TextDimColor">#FF565D68</Color>
   <Color x:Key="TextFaintColor">#FF8A919B</Color>
-  <Color x:Key="AccentColor">#FF2563EB</Color>
-  <Color x:Key="AccentHoverColor">#FF1D4ED8</Color>
-  <Color x:Key="AccentSoftColor">#FFE9F0FE</Color>
+  <Color x:Key="AccentColor">#FF3B82F6</Color>
+  <Color x:Key="AccentHoverColor">#FF2563EB</Color>
+  <Color x:Key="AccentSoftColor">#FFEAF2FE</Color>
+  <Color x:Key="AccentTextColor">#FF1B5FD9</Color>
   <Color x:Key="HoverColor">#FFF1F3F6</Color>
   <Color x:Key="SelectedColor">#FFE9F0FE</Color>
   <Color x:Key="OkColor">#FF15803D</Color>
@@ -40,6 +41,7 @@
   <SolidColorBrush x:Key="Accent" Color="{StaticResource AccentColor}" />
   <SolidColorBrush x:Key="AccentHover" Color="{StaticResource AccentHoverColor}" />
   <SolidColorBrush x:Key="AccentSoft" Color="{StaticResource AccentSoftColor}" />
+  <SolidColorBrush x:Key="AccentText" Color="{StaticResource AccentTextColor}" />
   <SolidColorBrush x:Key="Hover" Color="{StaticResource HoverColor}" />
   <SolidColorBrush x:Key="Selected" Color="{StaticResource SelectedColor}" />
   <SolidColorBrush x:Key="Ok" Color="{StaticResource OkColor}" />
@@ -450,7 +452,7 @@
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{StaticResource AccentSoft}" />
-              <Setter Property="Foreground" Value="{StaticResource Accent}" />
+              <Setter Property="Foreground" Value="{StaticResource AccentText}" />
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
@@ -755,7 +757,7 @@
             <Trigger Property="IsSelected" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{StaticResource AccentSoft}" />
               <Setter TargetName="bar" Property="Visibility" Value="Visible" />
-              <Setter Property="Foreground" Value="{StaticResource Accent}" />
+              <Setter Property="Foreground" Value="{StaticResource AccentText}" />
               <Setter Property="FontWeight" Value="SemiBold" />
             </Trigger>
           </ControlTemplate.Triggers>
