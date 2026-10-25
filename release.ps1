@@ -201,11 +201,23 @@ $signLog = Join-Path $env:TEMP 'minelib-sign.txt'
 if (Test-Path $signLog) { Remove-Item $signLog -Force }
 $signer = Start-Process -FilePath $exe -ArgumentList @('--sign', $manifestPath, $SigningKey) -PassThru -WindowStyle Hidden
 $signer.WaitForExit(180000) | Out-Null
-$signOk = (Test-Path $signLog) -and (Select-String -Path $signLog -Pattern 'SIGN OK selfcheck=True' -Quiet)
+$signText = if (Test-Path $signLog) { Get-Content $signLog -Raw -Encoding UTF8 } else { '' }
+# 输出形如 "SIGN OK version=0.11.8.4 selfcheck=True"：既要 OK 也要自检通过
+$signOk = ($signText -match 'SIGN OK') -and ($signText -match 'selfcheck=True')
 if (-not $signOk) {
-  $body = if (Test-Path $signLog) { Get-Content $signLog -Raw -Encoding UTF8 } else { '（没有输出）' }
+  $body = if ([string]::IsNullOrWhiteSpace($signText)) { '（没有输出）' } else { $signText }
   throw ('清单签名失败：' + $body)
 }
+# 复核：用内置公钥再验一遍刚写好的清单
+$verifyLog = Join-Path $env:TEMP 'minelib-verify.txt'
+if (Test-Path $verifyLog) { Remove-Item $verifyLog -Force }
+$verifier = Start-Process -FilePath $exe -ArgumentList @('--verify', $manifestPath) -PassThru -WindowStyle Hidden
+$verifier.WaitForExit(120000) | Out-Null
+$verifyText = if (Test-Path $verifyLog) { (Get-Content $verifyLog -Raw -Encoding UTF8).Trim() } else { '' }
+if ($verifyText -notmatch 'VERIFY OK') {
+  throw ('清单复核失败：' + $(if ([string]::IsNullOrWhiteSpace($verifyText)) { '（没有输出）' } else { $verifyText }))
+}
+Write-Host ('    ' + $verifyText)
 Write-Host '    清单已签名（本地自检通过）'
 
 $histPath = Join-Path $SiteRoot 'launcher\versions.json'
