@@ -15,4 +15,8 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="SixLabors.ImageSharp" Version="2.1.9" />
+  </ItemGroup>
+
 </Project>

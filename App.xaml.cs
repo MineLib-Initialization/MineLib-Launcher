@@ -1274,6 +1274,58 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 图标自检：WebP / PNG 都要能解出来；第二次走磁盘缓存不联网；失败可重试
+        if (e.Args.Contains("--selftest-icons"))
+        {
+            var sb = new StringBuilder();
+            try
+            {
+                const string webp = "https://cdn.modrinth.com/data/AANobbMI/295862f4724dc3f78df3447ad6072b2dcd3ef0c9_96.webp";
+                const string png = "https://cdn.modrinth.com/data/Bh37bMuy/icon.png";
+
+                ModIconCache.ClearMemory();
+                var w1 = await ModIconCache.LoadAsync(webp);
+                sb.AppendLine("WebP 图标：" + (w1 is null ? "解不出" : w1.Width + "x" + w1.Height) +
+                              "（应 >1x1）" + (w1 is null ? " 错误=" + (ModIconCache.LastError ?? "无") : ""));
+
+                var p1 = await ModIconCache.LoadAsync(png);
+                sb.AppendLine("PNG 图标：" + (p1 is null ? "解不出" : p1.Width + "x" + p1.Height) + "（应 >1x1）");
+
+                var diskFile = Directory.Exists(ModIconCache.DiskDir)
+                    ? Directory.GetFiles(ModIconCache.DiskDir, "*.png").FirstOrDefault()
+                    : null;
+                sb.AppendLine("磁盘缓存：" + (diskFile is null ? "没有" : Path.GetFileName(diskFile)) + "（应有一份）");
+
+                // 清掉内存缓存后再取一次：这次只能靠磁盘，不联网
+                ModIconCache.ClearMemory();
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var w2 = await ModIconCache.LoadAsync(webp);
+                sw.Stop();
+                sb.AppendLine("磁盘命中：" + (w2 is not null ? "是" : "否") + " 用时=" + sw.ElapsedMilliseconds +
+                              "ms（应 <300ms 且不联网）");
+
+                // 失败不该被永久记住：坏地址第一次失败、第二次仍然直接返回 null 但可以在 3 分钟后再试
+                var bad = "https://cdn.modrinth.com/data/this-project-does-not-exist/icon.webp";
+                ModIconCache.ClearMemory();
+                var b1 = await ModIconCache.LoadAsync(bad);
+                var sw2 = System.Diagnostics.Stopwatch.StartNew();
+                var b2 = await ModIconCache.LoadAsync(bad);
+                sw2.Stop();
+                sb.AppendLine("坏地址：第一次=" + (b1 is null ? "null" : "有图") + " 第二次=" +
+                              (b2 is null ? "null" : "有图") + " 用时=" + sw2.ElapsedMilliseconds + "ms（第二次应很快）");
+
+                var ok = w1 is not null && p1 is not null && diskFile is not null && w2 is not null &&
+                         sw.ElapsedMilliseconds < 3000 && b1 is null && b2 is null;
+                sb.AppendLine(ok ? "ICONS SELFTEST PASS" : "ICONS SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("ICONS SELFTEST FAIL " + ex.Message);
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-icons.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
         // Java 自检：本机探测（带缓存）、Adoptium 版本映射（含非 LTS 回退）
         if (e.Args.Contains("--selftest-javafind"))
         {
