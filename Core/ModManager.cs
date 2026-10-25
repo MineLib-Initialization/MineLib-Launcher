@@ -22,6 +22,25 @@ public static class ModManager
     {
         public string State => Enabled ? "已启用" : "已禁用";
 
+        /// <summary>
+        /// 界面上显示的名字：禁用的模组不显示 `xxx.jar.disabled`，
+        /// 只显示 `xxx.jar`，状态另外用「[已禁用]」标记表达。
+        /// </summary>
+        public string DisplayName
+        {
+            get
+            {
+                var suffix = DisabledSuffixOf(Name);
+                return suffix is null ? Name : Name[..^suffix.Length];
+            }
+        }
+
+        /// <summary>禁用时显示在名字后面的标记；启用时为空串（渲染出来什么也没有）。</summary>
+        public string DisabledTag => Enabled ? "" : "[已禁用]";
+
+        /// <summary>列表里右侧那列状态：禁用已经用标记表达了，这列只给启用中的模组用。</summary>
+        public string StateColumn => Enabled ? "已启用" : "";
+
         public string SizeText => Size >= 1048576
             ? (Size / 1048576.0).ToString("0.0") + " MB"
             : Math.Max(1, Size / 1024) + " KB";
