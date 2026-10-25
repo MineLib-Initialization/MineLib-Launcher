@@ -1,18 +1,46 @@
 ﻿<#
   MineLib release: bump version -> publish -> zip -> delta patch -> upload -> manifests -> deploy -> commit
-  Usage: powershell -ExecutionPolicy Bypass -File .\release.ps1 -Version 0.5.0 -Notes "..." [-SkipDeploy]
+
+  Usage: powershell -ExecutionPolicy Bypass -File .\release.ps1 -Version 0.5.0 -Notes "..."
+
+  发布目标（服务器 / 账号 / 路径 / 部署密钥 / 站点目录）**不写在仓库里**：
+    %USERPROFILE%\.minelib\deploy.json
+  格式见 release.local.example.json。没有这个文件、或者没有对应的私钥，脚本会在上传前就停下，
+  别人拿到这个仓库也推不到我的服务器（上传靠 SSH 私钥，私钥只在发布机上）。
+
+  [-SkipDeploy] 只发 GitHub Release，不部署站点；[-DryRun] 只打印将要做什么，什么都不发。
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Version,
   [string]$Notes = "",
-  [string]$SiteRoot = 'D:\dsh_Workspaces\Download\mclib',
-  [string]$Server = '38.95.75.199',
-  [string]$Key = "$env:USERPROFILE\.ssh\mclib_deploy",
-  [switch]$SkipDeploy
+  [string]$SiteRoot = "",
+  [string]$Server = "",
+  [string]$User = "",
+  [string]$Target = "",
+  [string]$Key = "",
+  [string]$SigningKey = "$env:USERPROFILE\.minelib\release-key.xml",
+  [switch]$SkipDeploy,
+  [switch]$InitSigningKey,
+  [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# ── 本机发布配置（不进仓库）──────────────────────────────────────────────
+$deployCfgPath = Join-Path $env:USERPROFILE '.minelib\deploy.json'
+if (Test-Path $deployCfgPath) {
+  try { $deployCfg = Get-Content $deployCfgPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $deployCfg = $null }
+  if ($deployCfg) {
+    if (-not $SiteRoot -and $deployCfg.siteRoot) { $SiteRoot = [string]$deployCfg.siteRoot }
+    if (-not $Server -and $deployCfg.server) { $Server = [string]$deployCfg.server }
+    if (-not $User -and $deployCfg.user) { $User = [string]$deployCfg.user }
+    if (-not $Target -and $deployCfg.target) { $Target = [string]$deployCfg.target }
+    if (-not $Key -and $deployCfg.key) { $Key = [string]$deployCfg.key }
+  }
+}
+if (-not $Key) { $Key = Join-Path $env:USERPROFILE '.ssh\mclib_deploy' }
+if (-not $SiteRoot) { $SiteRoot = Join-Path (Split-Path -Parent $root) 'mclib' }
 $pub = Join-Path $root 'bin\Release\net8.0-windows\win-x64\publish'
 $zip = Join-Path $env:TEMP 'MineLibLauncher-win-x64.zip'
 $patchFile = Join-Path $env:TEMP 'MineLibLauncher-patch.bin'
@@ -21,20 +49,61 @@ $baseExe = Join-Path $baseDir 'base.exe'
 $url = 'https://launcher.endercraft.top/launcher/MineLibLauncher-win-x64.zip'
 $patchUrl = 'https://launcher.endercraft.top/launcher/MineLibLauncher-patch.bin'
 
-Write-Host "1/7 set version $Version"
+Write-Host "0/8 签名私钥：$SigningKey"
+
+# 首次发布前初始化签名密钥（私钥留本机，公钥要写进 Core\ManifestSign.cs）
+if ($InitSigningKey) {
+  $devExe = Join-Path $root 'bin\Release\net8.0-windows\MineLibLauncher.exe'
+  if (-not (Test-Path $devExe)) { throw '先 dotnet build -c Release，再初始化签名密钥' }
+  if (Test-Path $SigningKey) { throw ('私钥已存在，不覆盖：' + $SigningKey) }
+  $pubFile = Join-Path $env:TEMP 'minelib-pubkey.txt'
+  if (Test-Path $pubFile) { Remove-Item $pubFile -Force }
+  $mk = Start-Process -FilePath $devExe -ArgumentList @('--mkkey', $SigningKey) -PassThru -WindowStyle Hidden
+  $mk.WaitForExit(120000) | Out-Null
+  $pubText = if (Test-Path $pubFile) { (Get-Content $pubFile -Raw).Trim() } else { '' }
+  if ([string]::IsNullOrWhiteSpace($pubText) -or $pubText.StartsWith('FAIL')) {
+    throw ('生成签名密钥失败：' + $pubText)
+  }
+  Write-Host ('    私钥已写入：' + $SigningKey)
+  Write-Host '    把下面这行公钥填进 Core\ManifestSign.cs 的 PublicKeyBase64：'
+  Write-Host ('    ' + $pubText)
+  exit 0
+}
+
+# ── 发布目标与密钥的硬门槛：缺任何一项都在上传前停下 ──────────────────────
+if (-not $SkipDeploy) {
+  if ([string]::IsNullOrWhiteSpace($Server)) {
+    throw ('没有配置发布目标：' + $deployCfgPath + '（需要 server / user / target）。' +
+           '别人拿到本仓库也推不到我的服务器，因为上传还要 SSH 私钥。')
+  }
+  if (-not (Test-Path $Key)) {
+    throw ('找不到部署私钥：' + $Key + '。上传需要私钥，仓库里不含任何密钥。')
+  }
+  Write-Host ("发布目标：" + $User + "@" + $Server + "  → " + $Target)
+} else {
+  Write-Host '本次跳过站点部署（-SkipDeploy）'
+}
+if ($DryRun) {
+  Write-Host ('[DryRun] 版本 ' + $Version + '，站点目录 ' + $SiteRoot)
+  Write-Host ('[DryRun] 上传会用：' + $Key + ' → ' + $(if ($SkipDeploy) { '（不部署）' } else { $User + '@' + $Server + ':' + $Target }))
+  Write-Host '[DryRun] 到此为止，什么都没有发布'
+  exit 0
+}
+
+Write-Host "1/8 set version $Version"
 $csproj = Join-Path $root 'MineLibLauncher.csproj'
 $text = Get-Content $csproj -Raw
 $text = [regex]::Replace($text, '<Version>[^<]*</Version>', '<Version>' + $Version + '</Version>')
 Set-Content $csproj -Value $text -NoNewline -Encoding UTF8
 
-Write-Host '2/7 publish single file (uncompressed bundle, so delta patches stay small)'
+Write-Host '2/8 publish single file (uncompressed bundle, so delta patches stay small)'
 Push-Location $root
 dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=false -p:DebugType=None --nologo -v q | Out-Null
 Pop-Location
 $exe = Join-Path $pub 'MineLibLauncher.exe'
 if (-not (Test-Path $exe)) { throw 'publish failed: no exe' }
 
-Write-Host '3/7 zip'
+Write-Host '3/8 zip'
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $pub '*') -DestinationPath $zip -CompressionLevel Optimal
 $size = (Get-Item $zip).Length
@@ -43,7 +112,7 @@ $exeSha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
 $exeSize = (Get-Item $exe).Length
 Write-Host ("    zip {0} MB  exe {1} MB" -f [math]::Round($size / 1MB, 1), [math]::Round($exeSize / 1MB, 1))
 
-Write-Host '4/7 delta patch'
+Write-Host '4/8 delta patch'
 $patchOk = $false
 $patchSha = ''
 $patchSize = 0
@@ -66,7 +135,7 @@ if (Test-Path $baseExe) {
 }
 if (-not $patchOk) { Write-Host '    no baseline, skip patch' }
 
-Write-Host '5/7 upload (4 parallel streams for the zip)'
+Write-Host '5/8 upload (4 parallel streams for the zip)'
 $parts = @()
 $len = (Get-Item $zip).Length
 $bytes = [System.IO.File]::ReadAllBytes($zip)
@@ -83,24 +152,24 @@ for ($i = 0; $i -lt $n; $i++) {
 }
 $procs = @()
 for ($i = 0; $i -lt $n; $i++) {
-  $cmd = '/c ssh -i "' + $Key + '" -o StrictHostKeyChecking=no mclib@' + $Server + ' "cat > /tmp/mlpart' + $i + '.bin" < "' + $parts[$i] + '"'
+  $cmd = '/c ssh -i "' + $Key + '" -o StrictHostKeyChecking=accept-new ' + $User + '@' + $Server + ' "cat > /tmp/mlpart' + $i + '.bin" < "' + $parts[$i] + '"'
   $procs += Start-Process -FilePath $env:ComSpec -ArgumentList $cmd -NoNewWindow -PassThru
 }
 $procs | ForEach-Object { $_.WaitForExit() }
-$remote = 'mclib@' + $Server
-ssh -i $Key -o StrictHostKeyChecking=no $remote "cat /tmp/mlpart0.bin /tmp/mlpart1.bin /tmp/mlpart2.bin /tmp/mlpart3.bin > /www/wwwroot/mclib/launcher/MineLibLauncher-win-x64.zip && rm -f /tmp/mlpart*.bin"
+$remote = $User + '@' + $Server
+ssh -i $Key -o StrictHostKeyChecking=accept-new $remote "cat /tmp/mlpart0.bin /tmp/mlpart1.bin /tmp/mlpart2.bin /tmp/mlpart3.bin > $Target/launcher/MineLibLauncher-win-x64.zip && rm -f /tmp/mlpart*.bin"
 if ($LASTEXITCODE -ne 0) { throw 'remote reassemble failed' }
 $parts | ForEach-Object { Remove-Item $_ -Force -ErrorAction SilentlyContinue }
 
 if ($patchOk) {
-  scp -i $Key -o StrictHostKeyChecking=no $patchFile ($remote + ':/www/wwwroot/mclib/launcher/MineLibLauncher-patch.bin')
+  scp -i $Key -o StrictHostKeyChecking=accept-new $patchFile ($remote + ':' + $Target + '/launcher/MineLibLauncher-patch.bin')
   if ($LASTEXITCODE -ne 0) { throw 'patch upload failed' }
 }
-$remoteSum = ssh -i $Key -o StrictHostKeyChecking=no $remote "sha256sum /www/wwwroot/mclib/launcher/MineLibLauncher-win-x64.zip | cut -d' ' -f1"
+$remoteSum = ssh -i $Key -o StrictHostKeyChecking=accept-new $remote "sha256sum $Target/launcher/MineLibLauncher-win-x64.zip | cut -d' ' -f1"
 if ($remoteSum.Trim() -ne $sha) { throw ('remote sha mismatch: ' + $remoteSum) }
 Write-Host '    remote sha ok'
 
-Write-Host '6/7 manifests'
+Write-Host '6/8 manifests + signature'
 $today = (Get-Date).ToString('yyyy-MM-dd')
 $entry = [ordered]@{
   version = $Version
@@ -120,7 +189,24 @@ if ($patchOk) {
   }
 }
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText((Join-Path $SiteRoot 'launcher\version.json'), ($entry | ConvertTo-Json -Depth 6), $utf8NoBom)
+$manifestPath = Join-Path $SiteRoot 'launcher\version.json'
+[System.IO.File]::WriteAllText($manifestPath, ($entry | ConvertTo-Json -Depth 6), $utf8NoBom)
+
+# 清单签名：启动器内置公钥验签，验不过就拒绝更新。
+# 私钥只在发布机上（%USERPROFILE%\.minelib\release-key.xml），不进仓库。
+if (-not (Test-Path $SigningKey)) {
+  throw ('缺少签名私钥：' + $SigningKey + '。首次发布先跑 release.ps1 -InitSigningKey，并把公钥写进 Core\ManifestSign.cs')
+}
+$signLog = Join-Path $env:TEMP 'minelib-sign.txt'
+if (Test-Path $signLog) { Remove-Item $signLog -Force }
+$signer = Start-Process -FilePath $exe -ArgumentList @('--sign', $manifestPath, $SigningKey) -PassThru -WindowStyle Hidden
+$signer.WaitForExit(180000) | Out-Null
+$signOk = (Test-Path $signLog) -and (Select-String -Path $signLog -Pattern 'SIGN OK selfcheck=True' -Quiet)
+if (-not $signOk) {
+  $body = if (Test-Path $signLog) { Get-Content $signLog -Raw -Encoding UTF8 } else { '（没有输出）' }
+  throw ('清单签名失败：' + $body)
+}
+Write-Host '    清单已签名（本地自检通过）'
 
 $histPath = Join-Path $SiteRoot 'launcher\versions.json'
 $hist = [System.IO.File]::ReadAllText($histPath) | ConvertFrom-Json
@@ -152,7 +238,7 @@ try {
 }
 
 if (-not $SkipDeploy) {
-  Write-Host '7/7 deploy site + commit'
+  Write-Host '7/8 deploy site + commit'
   powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $SiteRoot 'deploy.ps1') | Out-Null
   Push-Location $root
   git add -A

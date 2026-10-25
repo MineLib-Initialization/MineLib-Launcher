@@ -61,10 +61,18 @@ public static class Paths
     public static string LegacyConfigPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MineLib", "config.json");
 
-    /// <summary>供自检使用：把启动器目录指到别处。</summary>
+    /// <summary>
+    /// 供自检使用：把启动器目录指到别处。
+    /// 必须先把目录建出来：`Portable` 是靠"往启动器目录写探针文件"判断的，
+    /// 目录不存在会判成不可写 → 回退 %APPDATA%，自检就会写到用户真实配置上（踩过一次）。
+    /// </summary>
     public static void OverrideLauncherDir(string? dir)
     {
         _baseOverride = dir;
         _portable = null;
+        if (!string.IsNullOrEmpty(dir))
+        {
+            try { Directory.CreateDirectory(dir!); } catch (Exception) { }
+        }
     }
 }

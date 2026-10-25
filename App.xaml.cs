@@ -65,6 +65,58 @@ public partial class App : Application
         if (e.Args.Any(a => a.StartsWith("--selftest", StringComparison.OrdinalIgnoreCase)))
             AppConfig.SuppressSave = true;
 
+        // 发布工具：生成签名密钥对（私钥写到指定文件，公钥打到 stdout）
+        var mkkeyIdx = Array.IndexOf(e.Args, "--mkkey");
+        if (mkkeyIdx >= 0)
+        {
+            try
+            {
+                var path = e.Args.Length > mkkeyIdx + 1 ? e.Args[mkkeyIdx + 1] : "";
+                if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException("用法：--mkkey <私钥输出文件>");
+                var (pub, priv) = ManifestSign.NewKeyPair();
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+                File.WriteAllText(path, priv, Encoding.ASCII);
+                Console.WriteLine("PUBLICKEY=" + pub);
+                File.WriteAllText(Path.Combine(Path.GetTempPath(), "minelib-pubkey.txt"), pub, Encoding.ASCII);
+            }
+            catch (Exception ex)
+            {
+                File.WriteAllText(Path.Combine(Path.GetTempPath(), "minelib-pubkey.txt"), "FAIL " + ex.Message);
+            }
+            Shutdown();
+            return;
+        }
+
+        // 发布工具：给更新清单签名（原地写回 signature 字段）
+        var signIdx = Array.IndexOf(e.Args, "--sign");
+        if (signIdx >= 0)
+        {
+            var report = new StringBuilder();
+            try
+            {
+                if (e.Args.Length <= signIdx + 2) throw new InvalidOperationException(
+                    "用法：--sign <version.json> <私钥文件>");
+                var manifestPath = e.Args[signIdx + 1];
+                var keyPath = e.Args[signIdx + 2];
+                var manifest = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(manifestPath))
+                    as System.Text.Json.Nodes.JsonObject ?? throw new InvalidOperationException("清单不是 JSON 对象");
+                var priv = File.ReadAllText(keyPath).Trim();
+                var canonical = ManifestSign.CanonicalFrom(manifest);
+                manifest["signature"] = ManifestSign.Sign(canonical, priv);
+                File.WriteAllText(manifestPath, manifest.ToJsonString());
+                // 自检一遍：写完能验过才算成功
+                var ok = ManifestSign.Verify(canonical, manifest["signature"]!.ToString());
+                report.AppendLine("SIGN OK version=" + manifest["version"] + " selfcheck=" + ok);
+            }
+            catch (Exception ex)
+            {
+                report.AppendLine("SIGN FAIL " + ex.Message);
+            }
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "minelib-sign.txt"), report.ToString());
+            Shutdown();
+            return;
+        }
+
         // 自检：故意抛异常，验证全局兜底会把崩溃写进日志
         if (e.Args.Contains("--selftest-crash"))
         {
@@ -393,10 +445,22 @@ public partial class App : Application
             try
             {
                 Directory.CreateDirectory(gameDir);
-                const string sampleUrl = "https://launcher.endercraft.top/assets/shots/icon-256.png";
+                // 样例文件：多试几个来源，网络抽风时别直接判失败
                 var samplePath = Path.Combine(work, "sample.png");
-                if (!await Http.DownloadAsync(sampleUrl, samplePath, null, null))
-                    throw new InvalidOperationException("样例文件下载失败");
+                var candidates = new[]
+                {
+                    "https://launcher.endercraft.top/assets/shots/icon-256.png",
+                    "https://cdn.modrinth.com/data/AANobbMI/icon.png",
+                    "https://resources.download.minecraft.net/b6/b62ca8ec10d07e6bf5ac8dae0c8c1d2e6a1e3356"
+                };
+                var sampleUrl = "";
+                foreach (var url in candidates)
+                {
+                    if (await Http.DownloadAsync(url, samplePath, null, null)) { sampleUrl = url; break; }
+                }
+                if (string.IsNullOrEmpty(sampleUrl))
+                    throw new InvalidOperationException("样例文件下载失败（试了 " + candidates.Length + " 个来源）");
+                sb.AppendLine("样例文件来源：" + sampleUrl);
                 var sampleSha1 = Http.Sha1Of(samplePath);
                 var sampleSize = new FileInfo(samplePath).Length;
 
@@ -556,6 +620,9 @@ public partial class App : Application
             try
             {
                 Paths.OverrideLauncherDir(tempRoot);
+                if (!Path.GetFullPath(AppConfig.FilePath)
+                        .StartsWith(Path.GetFullPath(tempRoot), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("自检安全中止：配置目录没被重定向");
                 var gameDir = Path.Combine(tempRoot, ".minecraft");
                 var vdir = Path.Combine(gameDir, "versions", vid);
                 var modsDir = Path.Combine(vdir, "mods");
@@ -672,6 +739,339 @@ public partial class App : Application
                 try { if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true); } catch (Exception) { }
             }
             await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-uimods.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
+
+        // 更新安全自检：清单签名、哈希必填、体积核对、补丁回落 —— 全部 fail-closed
+        if (e.Args.Contains("--selftest-updatesec") || e.Args.Contains("--selftest-sign"))
+        {
+            var onlySign = e.Args.Contains("--selftest-sign");
+            var sb = new StringBuilder();
+            var work = Path.Combine(Path.GetTempPath(), "minelib-sec-" + Guid.NewGuid().ToString("N")[..6]);
+            var stage = Path.Combine(work, "stage");
+            var files = Path.Combine(work, "files");
+            try
+            {
+                Directory.CreateDirectory(stage);
+                Directory.CreateDirectory(files);
+                var (pub, priv) = ManifestSign.NewKeyPair();
+                ManifestSign.PublicKeyOverride = pub;
+                Updates.StageDirOverride = stage;
+
+                // 造一个"更新包"：zip 里塞一个 exe（内容随意），算出两份哈希
+                var exeBytes = Encoding.UTF8.GetBytes("FAKE-NEW-EXE-CONTENT");
+                var zipPath = Path.Combine(files, "update.zip");
+                using (var zip = System.IO.Compression.ZipFile.Open(zipPath,
+                           System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    var entry = zip.CreateEntry("MineLibLauncher.exe");
+                    using var s = entry.Open();
+                    s.Write(exeBytes, 0, exeBytes.Length);
+                }
+                var zipSha = Http.Sha256Of(zipPath);
+                var zipSize = new FileInfo(zipPath).Length;
+                var exeSha = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(exeBytes)).ToLowerInvariant();
+
+                Updates.UpdateInfo Make(bool withSig = true, bool withZipSha = true, bool withExeSha = true,
+                    bool withPatch = false, bool patchSha = true)
+                {
+                    var manifest = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["version"] = "99.0.0",
+                        ["date"] = "2026-10-25",
+                        ["size"] = zipSize,
+                        ["sha256"] = withZipSha ? zipSha : "",
+                        ["url"] = "https://example.invalid/update.zip",
+                        ["notes"] = "自检用",
+                        ["exe"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["size"] = exeBytes.Length,
+                            ["sha256"] = withExeSha ? exeSha : ""
+                        }
+                    };
+                    if (withPatch)
+                    {
+                        manifest["patch"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["from"] = Updates.Current,
+                            ["url"] = "https://example.invalid/patch.bin",
+                            ["size"] = 128,
+                            ["sha256"] = patchSha ? new string('a', 64) : ""
+                        };
+                    }
+                    var canonical = ManifestSign.CanonicalFrom(manifest);
+                    var sig = withSig ? ManifestSign.Sign(canonical, priv) : "";
+                    return new Updates.UpdateInfo("99.0.0", "https://example.invalid/update.zip", zipSize,
+                        manifest["sha256"]!.ToString(), "自检用",
+                        manifest["exe"]!["sha256"]!.ToString(),
+                        withPatch ? Updates.Current : "",
+                        withPatch ? "https://example.invalid/patch.bin" : "",
+                        withPatch ? 128 : 0,
+                        withPatch ? manifest["patch"]!["sha256"]!.ToString() : "",
+                        sig, exeBytes.Length, canonical);
+                }
+
+                // 自检里下载动作换成写本地文件（不联网）
+                var downloads = new List<string>();
+                Updates.FetchOverride = async (url, dest, ct2) =>
+                {
+                    downloads.Add(url);
+                    var bytes = File.ReadAllBytes(zipPath);
+                    await File.WriteAllBytesAsync(dest, bytes, ct2);
+                    return true;
+                };
+
+                // ---- 签名本身的用例 ----
+                var good = Make();
+                var okSign = ManifestSign.Verify(good.Canonical, good.Signature);
+                var tamperedVersion = ManifestSign.Sign(
+                    ManifestSign.CanonicalFrom(new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["version"] = "99.0.1", ["date"] = "2026-10-25", ["size"] = zipSize,
+                        ["sha256"] = zipSha, ["url"] = "https://example.invalid/update.zip",
+                        ["exe"] = new System.Text.Json.Nodes.JsonObject { ["size"] = exeBytes.Length, ["sha256"] = exeSha }
+                    }), priv);
+                var okTamper = !ManifestSign.Verify(good.Canonical, tamperedVersion);
+                var (pub2, priv2) = ManifestSign.NewKeyPair();
+                var okWrongKey = !ManifestSign.Verify(good.Canonical, ManifestSign.Sign(good.Canonical, priv2));
+                var okEmptySig = !ManifestSign.Verify(good.Canonical, "");
+                var okCanonicalStable = ManifestSign.CanonicalFrom(new System.Text.Json.Nodes.JsonObject
+                {
+                    ["version"] = "99.0.0", ["date"] = "2026-10-25", ["size"] = zipSize,
+                    ["sha256"] = zipSha.ToUpperInvariant(), ["url"] = "https://example.invalid/update.zip",
+                    ["notes"] = "改了备注不影响签名",
+                    ["exe"] = new System.Text.Json.Nodes.JsonObject
+                        { ["size"] = exeBytes.Length, ["sha256"] = exeSha.ToUpperInvariant() }
+                }) == good.Canonical;
+                sb.AppendLine($"签名：正签={okSign} 篡改被拒={okTamper} 换钥匙被拒={okWrongKey} " +
+                              $"空签名被拒={okEmptySig} 规范串稳定(大小写/备注)={okCanonicalStable}");
+                var okAll = okSign && okTamper && okWrongKey && okEmptySig && okCanonicalStable;
+
+                if (!onlySign)
+                {
+                    // ---- StageAsync 的 fail-closed 用例 ----
+                    async Task<string> TryStage(Updates.UpdateInfo info)
+                    {
+                        try { await Updates.StageAsync(info, null, null, CancellationToken.None); return ""; }
+                        catch (Exception ex) { return ex.Message; }
+                    }
+
+                    var e1 = await TryStage(Make(withSig: false));
+                    var e2 = await TryStage(Make(withZipSha: false));
+                    var e3 = await TryStage(Make(withExeSha: false));
+                    var badZip = Make();
+                    badZip = badZip with { Sha256 = new string('b', 64) };
+                    var e4 = await TryStage(badZip);
+                    var badExe = Make() with { ExeSha256 = new string('c', 64) };
+                    var e5 = await TryStage(badExe);
+                    sb.AppendLine($"拒绝：无签名=({e1.Contains("没有签名")}) 缺整包哈希=({e2.Contains("缺少整包")}) " +
+                                  $"缺 exe 哈希=({e3.Contains("缺少主程序")}) zip 哈希不符=({e4.Contains("sha256")}) " +
+                                  $"exe 哈希不符=({e5.Contains("exe sha256")})");
+                    var okReject = e1.Contains("没有签名") && e2.Contains("缺少整包") && e3.Contains("缺少主程序") &&
+                                   e4.Contains("sha256") && e5.Contains("exe sha256");
+
+                    // 正常路径：签名 + 哈希都对 → 真的暂存成功
+                    var staged = await Updates.StageAsync(good, null, null, CancellationToken.None);
+                    var okStage = File.Exists(staged) &&
+                                  Http.Sha256Of(staged) == exeSha && File.Exists(Updates.StagedExe);
+
+                    // 补丁缺 sha256 → 不能用补丁，回落全量（且不应该去下补丁）
+                    downloads.Clear();
+                    var noPatchSha = Make(withPatch: true, patchSha: false);
+                    var okNoPatchSha = (await TryStage(noPatchSha)).Length == 0 &&
+                                       downloads.All(u => !u.Contains("patch"));
+
+                    sb.AppendLine($"暂存：正常路径成功={okStage} 补丁缺哈希时回落全量={okNoPatchSha}");
+                    okAll = okAll && okReject && okStage && okNoPatchSha;
+                }
+
+                sb.AppendLine(okAll
+                    ? (onlySign ? "SIGN SELFTEST PASS" : "UPDATESEC SELFTEST PASS")
+                    : (onlySign ? "SIGN SELFTEST FAIL" : "UPDATESEC SELFTEST FAIL"));
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine((onlySign ? "SIGN" : "UPDATESEC") + " SELFTEST FAIL " + ex);
+            }
+            finally
+            {
+                Updates.FetchOverride = null;
+                Updates.StageDirOverride = null;
+                ManifestSign.PublicKeyOverride = null;
+                try { if (Directory.Exists(work)) Directory.Delete(work, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(),
+                onlySign ? "minelib-sign-self.txt" : "minelib-updatesec.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
+
+        // injector 校验自检：meta 取 hash 的兼容性、缓存校验、被篡改能发现
+        if (e.Args.Contains("--selftest-injector"))
+        {
+            var sb = new StringBuilder();
+            var tempRoot = Path.Combine(Path.GetTempPath(), "minelib-inj-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                Paths.OverrideLauncherDir(tempRoot);
+                var redirected = Path.GetFullPath(AppConfig.FilePath)
+                    .StartsWith(Path.GetFullPath(tempRoot), StringComparison.OrdinalIgnoreCase);
+                if (!redirected) throw new InvalidOperationException(
+                    "自检安全中止：配置目录没被重定向到临时目录（" + AppConfig.FilePath + "）");
+                var libDir = YggdrasilAuth.LibDir;
+                Directory.CreateDirectory(libDir);
+
+                string Hex(char c) => new(c, 64);
+                var shapes = new (string name, System.Text.Json.Nodes.JsonObject meta, string? expect)[]
+                {
+                    ("checksums.sha256", new System.Text.Json.Nodes.JsonObject
+                        { ["checksums"] = new System.Text.Json.Nodes.JsonObject { ["sha256"] = Hex('a') } }, Hex('a')),
+                    ("顶层 sha256", new System.Text.Json.Nodes.JsonObject { ["sha256"] = Hex('b') }, Hex('b')),
+                    ("artifact.checksums", new System.Text.Json.Nodes.JsonObject
+                        { ["artifact"] = new System.Text.Json.Nodes.JsonObject
+                            { ["checksums"] = new System.Text.Json.Nodes.JsonObject { ["sha256"] = Hex('c') } } }, Hex('c')),
+                    ("download.checksums", new System.Text.Json.Nodes.JsonObject
+                        { ["download"] = new System.Text.Json.Nodes.JsonObject
+                            { ["checksums"] = new System.Text.Json.Nodes.JsonObject { ["sha256"] = Hex('d') } } }, Hex('d')),
+                    ("没有 hash", new System.Text.Json.Nodes.JsonObject { ["version"] = "1.0" }, null),
+                    ("hash 不合法", new System.Text.Json.Nodes.JsonObject { ["sha256"] = "xyz" }, null)
+                };
+                var okShapes = true;
+                foreach (var (name, meta, expect) in shapes)
+                {
+                    var got = YggdrasilAuth.ExpectedSha256(meta);
+                    var shapeOk = string.Equals(got, expect, StringComparison.OrdinalIgnoreCase);
+                    if (!shapeOk) okShapes = false;
+                    sb.AppendLine($"  meta[{name}] -> {(got is null ? "null" : got[..8] + "…")} 期望 {(expect is null ? "null" : expect[..8] + "…")} {(shapeOk ? "OK" : "错")}");
+                }
+                sb.AppendLine("meta 取 hash 兼容性 = " + okShapes);
+
+                // 缓存：有 sidecar 就校验
+                var jar = Path.Combine(libDir, "authlib-injector-9.9.9.jar");
+                File.WriteAllText(jar, "fake-injector-bytes");
+                var realSha = Http.Sha256Of(jar);
+                File.WriteAllText(jar + ".sha256", realSha);
+                var found1 = YggdrasilAuth.FindCachedInjector();
+                var okCached = string.Equals(found1, jar, StringComparison.OrdinalIgnoreCase);
+                sb.AppendLine("sidecar 匹配时认这个缓存 = " + okCached);
+
+                // 篡改：追加内容，hash 变了 → 应该被删掉并返回空
+                File.AppendAllText(jar, "tampered");
+                var found2 = YggdrasilAuth.FindCachedInjector();
+                var okTamper = found2.Length == 0 && !File.Exists(jar);
+                sb.AppendLine("被篡改时删除并拒绝使用 = " + okTamper + "（" + (YggdrasilAuth.LastInjectorProblem ?? "") + "）");
+
+                // 没有 sidecar：只能按存在性兜底（老缓存迁移路径）
+                File.WriteAllText(jar, "legacy-injector");
+                var found3 = YggdrasilAuth.FindCachedInjector();
+                var okLegacy = string.Equals(found3, jar, StringComparison.OrdinalIgnoreCase);
+                sb.AppendLine("无 sidecar 的老缓存仍可用 = " + okLegacy);
+
+                var ok = okShapes && okCached && okTamper && okLegacy;
+                sb.AppendLine(ok ? "INJECTOR SELFTEST PASS" : "INJECTOR SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("INJECTOR SELFTEST FAIL " + ex);
+            }
+            finally
+            {
+                try { Paths.OverrideLauncherDir(null); } catch (Exception) { }
+                try { if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-injector.txt"), sb.ToString());
+            Shutdown();
+            return;
+        }
+
+        // 令牌加密自检：DPAPI 往返、明文迁移、.bak 不留明文、坏密文不崩
+        if (e.Args.Contains("--selftest-secrets"))
+        {
+            var sb = new StringBuilder();
+            var tempRoot = Path.Combine(Path.GetTempPath(), "minelib-sec2-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                Paths.OverrideLauncherDir(tempRoot);
+                // 安全阀：确认配置真的落在临时目录里，绝不碰用户真实配置
+                var realCfg = Path.GetFullPath(AppConfig.FilePath);
+                if (!realCfg.StartsWith(Path.GetFullPath(tempRoot), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("自检安全中止：配置目录没被重定向（" + realCfg + "）");
+                const string token = "PLAINTEXT-TOKEN-abcdef-1234567890";
+                const string refresh = "REFRESH-TOKEN-0987654321-zyxw";
+
+                var round = Secrets.Unprotect(Secrets.Protect(token));
+                var okRound = round == token && Secrets.IsProtected(Secrets.Protect(token));
+                var okEmpty = Secrets.Protect("") == "" && Secrets.Unprotect("") == "";
+                var okPlainFallback = Secrets.Unprotect("legacy-plain") == "legacy-plain";
+                var okBadBlob = Secrets.Unprotect(Secrets.Prefix + "bm90LWEtcmVhbC1ibG9i") == "";
+                sb.AppendLine($"DPAPI：往返={okRound} 空值={okEmpty} 老明文可读={okPlainFallback} 坏密文不崩={okBadBlob}");
+
+                // 写一份"老配置"（明文令牌），走 Load → Save 的迁移路径
+                var cfgDir = Paths.ConfigDir;
+                Directory.CreateDirectory(cfgDir);
+                var cfgPath = Path.Combine(cfgDir, "config.json");
+                var legacy = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["GameDir"] = Path.Combine(tempRoot, ".minecraft"),
+                    ["Roots"] = new System.Text.Json.Nodes.JsonArray(),
+                    ["Accounts"] = new System.Text.Json.Nodes.JsonArray
+                    {
+                        new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["Type"] = "microsoft", ["Name"] = "测试号", ["Uuid"] = "uuid-1",
+                            ["AccessToken"] = token, ["RefreshToken"] = refresh,
+                            ["ClientToken"] = token, ["ExpiresAt"] = 0
+                        }
+                    }
+                };
+                File.WriteAllText(cfgPath, legacy.ToJsonString());
+                File.WriteAllText(cfgPath + ".bak", legacy.ToJsonString());   // 故意留一份明文备份
+
+                var cfg = AppConfig.Load();
+                var loadedToken = cfg.Accounts.FirstOrDefault()?.AccessToken ?? "";
+                var okMigrateRead = loadedToken == token;
+                // 自检模式默认禁写盘；这里把启动器目录指到了临时目录，临时放开一次来验证真实保存行为
+                AppConfig.SuppressSave = false;
+                cfg.Save();
+
+                var afterText = File.ReadAllText(cfgPath);
+                var bakText = File.Exists(cfgPath + ".bak") ? File.ReadAllText(cfgPath + ".bak") : "";
+                var okEncrypted = afterText.Contains(Secrets.Prefix) && !afterText.Contains(token) &&
+                                  !afterText.Contains(refresh);
+                var okBakClean = !bakText.Contains(token) && !bakText.Contains(refresh);
+                var reloaded = AppConfig.Load().Accounts.FirstOrDefault()?.AccessToken ?? "";
+                var okReload = reloaded == token;
+                sb.AppendLine($"迁移：读明文令牌={okMigrateRead} 保存后成密文={okEncrypted} .bak 无明文={okBakClean} " +
+                              $"重新载入能解回={okReload}");
+
+                // 坏密文：不该让启动崩，解不出就当没有令牌
+                var broken = legacy.DeepClone().AsObject();
+                broken["Accounts"]![0]!["AccessToken"] = Secrets.Prefix + "bm90LWEtcmVhbC1ibG9i";
+                File.WriteAllText(cfgPath, broken.ToJsonString());
+                var brokenToken = "";
+                var crashed = false;
+                try { brokenToken = AppConfig.Load().Accounts.FirstOrDefault()?.AccessToken ?? ""; }
+                catch (Exception) { crashed = true; }
+                var okBroken = !crashed && brokenToken == "";
+                sb.AppendLine("坏密文不崩且当空令牌 = " + okBroken);
+
+                AppConfig.SuppressSave = true;
+                var ok = okRound && okEmpty && okPlainFallback && okBadBlob && okMigrateRead && okEncrypted &&
+                         okBakClean && okReload && okBroken;
+                sb.AppendLine(ok ? "SECRETS SELFTEST PASS" : "SECRETS SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("SECRETS SELFTEST FAIL " + ex);
+            }
+            finally
+            {
+                try { Paths.OverrideLauncherDir(null); } catch (Exception) { }
+                try { if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true); } catch (Exception) { }
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-secrets.txt"), sb.ToString());
             Shutdown();
             return;
         }

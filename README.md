@@ -102,9 +102,26 @@ SetStatus(Notice.Error("下载游戏文件", "再次点击下载以重试"), fal
 | `DownloadThreads` | 下载并发 |
 | `JavaPath` | 手动指定的 javaw.exe |
 | `Version` | 上次选中的客户端 |
-| `Accounts` | 账号（外置登录会保存 token） |
+| `Accounts` | 账号（`AccessToken` / `RefreshToken` / `ClientToken` 用 DPAPI 加密后保存） |
 
 写入是「先写临时文件再替换」，覆盖前保留一份 `config.json.bak`；主文件损坏时自动回退备份。
+
+### 安全约定
+
+- **更新清单必须签名**：`version.json` 里的 `signature` 是 ECDSA P-256 对「版本 / 日期 / 体积 / 整包 sha256 / 下载地址 / exe 体积与 sha256 / 补丁三要素」规范串的签名，启动器内置公钥验签。**签名缺失或验不过就拒绝更新**，不会出现"清单被换掉、恶意 exe 顺带落地"。
+- **哈希是必填项**：整包 `sha256`、`exe.sha256` 缺任何一个都拒绝更新；解压出来的 exe 还会再核对一次体积与哈希；补丁路径要求补丁哈希与重建结果哈希都在且都对得上，否则回落整包。
+- **令牌不明文落盘**：账号令牌用 Windows DPAPI（CurrentUser + 固定附加熵）加密成 `dpapi:v1:<base64>`；老配置里的明文在下次保存时自动迁移，连 `.bak` 都不会留明文；换机器/换用户解不开时当作没有令牌处理。
+- **authlib-injector 校验内容**：从官方 meta 取 `checksums.sha256`，下载后校验；本地缓存旁边留 `*.sha256` sidecar，启动路径发现被替换会删掉重新下载。
+
+发布前先初始化签名私钥（只做一次，私钥不进仓库）：
+
+```powershell
+dotnet build -c Release
+powershell -ExecutionPolicy Bypass -File .\release.ps1 -Version 0.0.0 -InitSigningKey
+# 把打印出来的公钥填进 Core\ManifestSign.cs 的 PublicKeyBase64
+```
+
+之后每次 `release.ps1 -Version X -Notes "..."` 都会在写清单时自动签名并本地自检一遍。
 
 ## 命令行（调试与自检）
 
@@ -126,9 +143,15 @@ SetStatus(Notice.Error("下载游戏文件", "再次点击下载以重试"), fal
 | `--selftest-log` | 日志批量刷盘的吞吐与完整性 |
 | `--selftest-crash` | 全局异常兜底与崩溃日志 |
 | `--selftest-close` | 开窗再关窗，断言没有异常落进崩溃日志（标题栏按钮配色写错曾在这里炸过） |
+| `--selftest-sign` | 清单签名：正签通过、篡改字段被拒、换钥匙被拒、空签名被拒、规范串稳定 |
+| `--selftest-updatesec` | 更新链路 fail-closed：无签名 / 缺哈希 / 哈希不符 / exe 不符全部拒绝；补丁缺哈希回落整包 |
+| `--selftest-injector` | 从 meta 取 sha256 的兼容性、缓存校验、本地被篡改能发现 |
+| `--selftest-secrets` | DPAPI 往返、明文迁移、`.bak` 不留明文、坏密文当空令牌不崩 |
 | `--selftest-modmgr` | 模组开关：禁用/启用、重复操作被挡、改名冲突、大小写后缀、`.disabled` 兼容、500 个批量耗时 |
 | `--selftest-ui-mods` | 界面接线：临时目录里开窗→选中客户端→切模组页→点禁用/启用→校验磁盘（不碰真实数据） |
 | `--selftest-mrpack [包路径]` | 合成 .mrpack（含跳过项 / 越界路径 / overrides）真实装一遍；给路径则额外解析真实整合包 |
+
+发布工具：`--mkkey <私钥文件>`（生成签名密钥对，公钥打到 stdout）、`--sign <version.json> <私钥文件>`（给清单签名并自检）。
 
 其它：`--selftest`（加载器/模组接口）、`--selftest-download`（下载测速）、`--selftest-java <主版本>`（自动获取 Java）、`--selftest-create`（装一个客户端到临时目录）、`--selftest-source`（下载源逐项验证）、`--mkpatch <旧exe> <新exe> <补丁>`（生成增量补丁）、`--shot <页签> <查询> <输出.png>`（离屏渲染界面图）。
 

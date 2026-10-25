@@ -25,12 +25,19 @@ public static class Updates
         }
     }
 
-    public static string StageDir => Path.Combine(AppContext.BaseDirectory, "MineLib", "update");
+    /// <summary>自检用：把暂存目录指到临时目录，别动真实安装目录。</summary>
+    internal static string? StageDirOverride;
+
+    public static string StageDir => StageDirOverride ??
+        Path.Combine(AppContext.BaseDirectory, "MineLib", "update");
     public static string StagedExe => Path.Combine(StageDir, "MineLibLauncher.exe");
 
     public sealed record UpdateInfo(string Version, string Url, long Size, string Sha256, string Notes,
         string ExeSha256 = "", string PatchFrom = "", string PatchUrl = "", long PatchSize = 0,
-        string PatchSha256 = "");
+        string PatchSha256 = "", string Signature = "", long ExeSize = 0, string Canonical = "");
+
+    /// <summary>自检用：替换真实下载动作（参数是 url 与目标路径），避免测试依赖网络。</summary>
+    internal static Func<string, string, CancellationToken, Task<bool>>? FetchOverride;
 
     public static bool HasStagedUpdate => File.Exists(StagedExe);
 
@@ -57,18 +64,27 @@ public static class Updates
         var url = node["url"]?.ToString();
         if (string.IsNullOrEmpty(version) || string.IsNullOrEmpty(url)) return null;
         if (CompareVersions(version, Current) <= 0) return null;
+        var manifest = node as System.Text.Json.Nodes.JsonObject ?? new System.Text.Json.Nodes.JsonObject();
         return new UpdateInfo(version, url,
-            node["size"]?.GetValue<long>() ?? 0,
+            ManifestSign.AsLong(node["size"]),
             node["sha256"]?.ToString() ?? "",
             node["notes"]?.ToString() ?? "",
             node["exe"]?["sha256"]?.ToString() ?? "",
             node["patch"]?["from"]?.ToString() ?? "",
             node["patch"]?["url"]?.ToString() ?? "",
-            node["patch"]?["size"]?.GetValue<long>() ?? 0,
-            node["patch"]?["sha256"]?.ToString() ?? "");
+            ManifestSign.AsLong(node["patch"]?["size"]),
+            node["patch"]?["sha256"]?.ToString() ?? "",
+            node["signature"]?.ToString() ?? "",
+            ManifestSign.AsLong(node["exe"]?["size"]),
+            ManifestSign.CanonicalFrom(manifest));
     }
 
-    /// <summary>下载并暂存新版本；返回暂存的 exe 路径。</summary>
+    /// <summary>
+    /// 下载并暂存新版本；返回暂存的 exe 路径。
+    ///
+    /// 这里是 fail-closed 的：清单没签名、签名验不过、缺少整包/主程序哈希、哈希对不上、
+    /// 体积对不上，一律拒绝更新 —— 宁可这次不更新，也不能把没验过的 exe 换上去。
+    /// </summary>
     public static async Task<string> StageAsync(UpdateInfo info, IProgress<InstallProgress>? progress,
         Action<string>? log, CancellationToken ct)
     {
@@ -83,17 +99,34 @@ public static class Updates
         }
         var zipPath = Path.Combine(StageDir, "update.zip");
 
-        // 先试增量：本地 exe + 小补丁，通常只有几 MB，比整包快一个数量级
+        // 0) 清单本身的签名：没有签名或验不过就别往下走
+        if (string.IsNullOrWhiteSpace(info.Signature))
+            throw new InvalidOperationException("更新清单没有签名，已拒绝更新");
+        var canonical = string.IsNullOrEmpty(info.Canonical)
+            ? ManifestSign.Canonical(info.Version, "", info.Size, info.Sha256, info.Url, info.ExeSize,
+                info.ExeSha256, info.PatchFrom, info.PatchUrl, info.PatchSize, info.PatchSha256)
+            : info.Canonical;
+        if (!ManifestSign.Verify(canonical, info.Signature))
+            throw new InvalidOperationException("更新清单验签失败，已拒绝更新" +
+                                               (ManifestSign.LastError is null ? "" : "：" + ManifestSign.LastError));
+
+        // 1) 哈希字段是必须的：缺了就拒绝（以前的写法是"缺了就跳过校验"，等于没校验）
+        if (!IsSha256(info.Sha256)) throw new InvalidOperationException("更新清单缺少整包 sha256，已拒绝更新");
+        if (!IsSha256(info.ExeSha256)) throw new InvalidOperationException("更新清单缺少主程序 sha256，已拒绝更新");
+
+        // 2) 先试增量：本地 exe + 小补丁。两个哈希都在、基线版本一致、补丁不太大才用。
         var localExe = Path.Combine(AppContext.BaseDirectory, "MineLibLauncher.exe");
-        // 只有「起点版本与当前版本完全一致」才用增量；跨版本（比如 0.5.0 直接升 0.5.4）
-        // 一律走全量包，补丁里的基线大小/哈希也对不上，强行套会重建出坏文件。
+        var patchHasHashes = IsSha256(info.PatchSha256);   // 补丁哈希缺失就不能用补丁
         var patchUsable = !string.IsNullOrEmpty(info.PatchUrl)
                           && string.Equals(info.PatchFrom, Current, StringComparison.Ordinal)
                           && File.Exists(localExe)
+                          && patchHasHashes
                           // 补丁比整包还大就别折腾，直接下整包
                           && (info.Size <= 0 || info.PatchSize <= info.Size / 2);
         if (!patchUsable && !string.IsNullOrEmpty(info.PatchFrom) && info.PatchFrom != Current)
             log?.Invoke("当前版本 " + Current + " 与补丁基线 " + info.PatchFrom + " 不同，改下全量包");
+        if (!patchUsable && !string.IsNullOrEmpty(info.PatchUrl) && !patchHasHashes)
+            log?.Invoke("补丁信息缺少 sha256，改下全量包");
         if (patchUsable)
         {
             try
@@ -101,30 +134,34 @@ public static class Updates
                 var patchPath = Path.Combine(StageDir, "update.patch");
                 progress?.Report(new InstallProgress(
                     "下载增量补丁 " + (info.PatchSize / 1048576.0).ToString("0.0") + " MB…", 0));
-                if (await Http.DownloadAsync(info.PatchUrl, patchPath, null, null, ct).ConfigureAwait(false))
+                if (await FetchAsync(info.PatchUrl, patchPath, null, ct).ConfigureAwait(false))
                 {
-                    if (string.IsNullOrEmpty(info.PatchSha256) ||
-                        Http.Sha256Of(patchPath) == info.PatchSha256.ToLowerInvariant())
+                    // 两个哈希都必须对上；对不上就整包，绝不把没验过的结果留下来
+                    var patchOk = Http.Sha256Of(patchPath) == info.PatchSha256.ToLowerInvariant();
+                    if (patchOk)
                     {
                         log?.Invoke("补丁下载完成，正在本地重建新版本");
                         var rebuilt = Path.Combine(StageDir, "update.rebuilt.exe");
                         var sha = await Task.Run(() => Patcher.Apply(localExe, patchPath, rebuilt), ct)
                             .ConfigureAwait(false);
-                        if (string.IsNullOrEmpty(info.ExeSha256) ||
-                            sha == info.ExeSha256.ToLowerInvariant())
+                        if (string.Equals(sha, info.ExeSha256.ToLowerInvariant(), StringComparison.Ordinal))
                         {
                             File.Move(rebuilt, StagedExe, true);
-                            try { File.Delete(patchPath); } catch (Exception) { }
+                            TryDelete(patchPath);
                             WriteApplyScript();
                             WriteNotes(info);
-                            log?.Invoke("增量更新已就绪（校验通过）");
+                            log?.Invoke("增量更新已就绪（签名 + 双哈希校验通过）");
                             progress?.Report(new InstallProgress("增量更新完成", 1));
                             return StagedExe;
                         }
-                        log?.Invoke("重建结果校验不符，改用整包");
-                        try { File.Delete(rebuilt); } catch (Exception) { }
+                        log?.Invoke("重建结果与清单的 exe sha256 不符，改用整包");
+                        TryDelete(rebuilt);
                     }
-                    try { File.Delete(patchPath); } catch (Exception) { }
+                    else
+                    {
+                        log?.Invoke("补丁文件 sha256 不符，改用整包");
+                    }
+                    TryDelete(patchPath);
                 }
             }
             catch (Exception ex)
@@ -133,6 +170,7 @@ public static class Updates
             }
         }
 
+        // 3) 全量包
         progress?.Report(new InstallProgress("下载新版本 " + info.Version + "…", 0));
         var dl = progress is null ? null : new Progress<(long done, long total)>(p =>
         {
@@ -141,35 +179,70 @@ public static class Updates
                 "下载新版本… " + (p.done / 1048576.0).ToString("0.0") + " / " +
                 (p.total / 1048576.0).ToString("0.0") + " MB", frac));
         });
-        if (!await Http.DownloadAsync(info.Url, zipPath, null, dl, ct).ConfigureAwait(false))
+        if (!await FetchAsync(info.Url, zipPath, dl, ct).ConfigureAwait(false))
             throw new InvalidOperationException("更新包下载失败");
 
-        if (!string.IsNullOrEmpty(info.Sha256))
+        if (info.Size > 0 && new FileInfo(zipPath).Length != info.Size)
         {
-            await using var fs = File.OpenRead(zipPath);
-            var actual = Convert.ToHexString(await SHA256.HashDataAsync(fs, ct).ConfigureAwait(false))
-                .ToLowerInvariant();
-            if (!string.Equals(actual, info.Sha256.ToLowerInvariant(), StringComparison.Ordinal))
-            {
-                File.Delete(zipPath);
-                throw new InvalidOperationException("更新包校验失败（sha256 不匹配）");
-            }
+            TryDelete(zipPath);
+            throw new InvalidOperationException("更新包体积与清单不符，已删除");
+        }
+        var zipSha = Http.Sha256Of(zipPath);
+        if (!string.Equals(zipSha, info.Sha256.ToLowerInvariant(), StringComparison.Ordinal))
+        {
+            TryDelete(zipPath);
+            throw new InvalidOperationException("更新包 sha256 与清单不符，已删除");
         }
 
         log?.Invoke("更新包校验通过，解压中");
-        using (var zip = ZipFile.OpenRead(zipPath))
+        var exeTmp = Path.Combine(StageDir, "update.extract.exe");
+        try
         {
-            var entry = zip.Entries.FirstOrDefault(e =>
-                string.Equals(e.Name, "MineLibLauncher.exe", StringComparison.OrdinalIgnoreCase));
-            if (entry is null) throw new InvalidOperationException("更新包里没有 MineLibLauncher.exe");
-            entry.ExtractToFile(StagedExe, true);
+            using (var zip = ZipFile.OpenRead(zipPath))
+            {
+                var entry = zip.Entries.FirstOrDefault(e =>
+                    string.Equals(e.Name, "MineLibLauncher.exe", StringComparison.OrdinalIgnoreCase));
+                if (entry is null) throw new InvalidOperationException("更新包里没有 MineLibLauncher.exe");
+                entry.ExtractToFile(exeTmp, true);
+            }
+            // 解压出来的 exe 也要和清单对得上：防止"包对了但里面的程序被换过"
+            if (info.ExeSize > 0 && new FileInfo(exeTmp).Length != info.ExeSize)
+                throw new InvalidOperationException("更新包里的 exe 体积与清单不符");
+            var exeSha = Http.Sha256Of(exeTmp);
+            if (!string.Equals(exeSha, info.ExeSha256.ToLowerInvariant(), StringComparison.Ordinal))
+                throw new InvalidOperationException("更新包里的 exe sha256 与清单不符");
+            File.Move(exeTmp, StagedExe, true);
         }
-        TryDelete(zipPath);
+        catch (Exception)
+        {
+            TryDelete(exeTmp);
+            TryDelete(StagedExe);
+            throw;
+        }
+        finally
+        {
+            TryDelete(zipPath);
+        }
         WriteApplyScript();
-
         WriteNotes(info);
         return StagedExe;
     }
+
+    /// <summary>是不是一个像样的 sha256（64 位十六进制）。</summary>
+    internal static bool IsSha256(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value!.Length == 64 &&
+        value.All(c => Uri.IsHexDigit(c));
+
+    /// <summary>下载文件到指定路径：自检可以替换掉真实下载。</summary>
+    private static async Task<bool> FetchAsync(string url, string dest,
+        IProgress<(long done, long total)>? progress, CancellationToken ct)
+    {
+        if (FetchOverride is not null)
+            return await FetchOverride(url, dest, ct).ConfigureAwait(false);
+        return await Http.DownloadAsync(url, dest, null, progress, ct).ConfigureAwait(false);
+    }
+
+
 
     /// <summary>删文件不抛异常（临时文件被占用不该让整个更新失败）。</summary>
     private static void TryDelete(string path)
