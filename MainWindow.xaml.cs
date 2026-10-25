@@ -1240,7 +1240,7 @@ public partial class MainWindow : Window
             NoticeBar.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1,
                 TimeSpan.FromMilliseconds(180)) { EasingFunction = EaseOut });
             slide.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty,
-                new System.Windows.Media.Animation.DoubleAnimation(8, 0, TimeSpan.FromMilliseconds(220))
+                new System.Windows.Media.Animation.DoubleAnimation(10, 0, TimeSpan.FromMilliseconds(220))
                 { EasingFunction = EaseOut });
         }
         catch (Exception) { }
@@ -2004,19 +2004,19 @@ public partial class MainWindow : Window
             { EasingFunction = ease, FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop });
     }
 
-    /// <summary>底部指示条滑到选中的页签下面。</summary>
+    /// <summary>左侧导航的选中胶囊滑到当前项（纵向）。</summary>
     private void AnimateIndicator(FrameworkElement target)
     {
         try
         {
-            var to = target.TransformToAncestor(TabStripRoot).Transform(new Point(0, 0)).X;
-            TabIndicator.Width = target.ActualWidth;
+            var to = target.TransformToAncestor(TabStripRoot).Transform(new Point(0, 0)).Y;
+            TabIndicator.Height = target.ActualHeight;
             var ease = new System.Windows.Media.Animation.CubicEase
             {
                 EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut
             };
-            TabIndicatorShift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty,
-                new System.Windows.Media.Animation.DoubleAnimation(to, TimeSpan.FromMilliseconds(240))
+            TabIndicatorShift.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(to, TimeSpan.FromMilliseconds(220))
                 { EasingFunction = ease });
         }
         catch (Exception) { }

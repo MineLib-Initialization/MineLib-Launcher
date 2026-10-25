@@ -99,7 +99,7 @@
   </Style>
 
   <Style x:Key="PageTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-    <Setter Property="FontSize" Value="17" />
+    <Setter Property="FontSize" Value="20" />
     <Setter Property="FontWeight" Value="SemiBold" />
     <Setter Property="TextTrimming" Value="CharacterEllipsis" />
   </Style>
@@ -286,6 +286,35 @@
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{StaticResource CloseHover}" />
               <Setter Property="Foreground" Value="White" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- 左侧导航项：图标 + 文字，选中时变成胶囊底 + 强调色 -->
+  <Style x:Key="NavRailButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Foreground" Value="{StaticResource TextDim}" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Height" Value="58" />
+    <Setter Property="Margin" Value="8,0" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="10"
+                  Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Hover}" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource Selected}" />
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
