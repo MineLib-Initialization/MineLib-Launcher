@@ -45,7 +45,7 @@ ID@Xbox 回复「Minecraft 不归 ID 团队管，请继续找支持团队」；`
 >
 > I am the maintainer of **MineLib Launcher**, a free, open-source, non-commercial launcher for **Minecraft: Java Edition** on Windows (C# / .NET 8 / WPF).
 > Repository: https://github.com/MineLib-Initialization/MineLib-Launcher
-> Public build: http://38.95.75.199/launcher/MineLibLauncher-win-x64.zip
+> Public build: https://launcher.endercraft.top/launcher/MineLibLauncher-win-x64.zip
 >
 > I am asking for the official process to authorize **my own** Entra application registration to call Minecraft Services. I do not want to reuse another launcher's client id, spoof an application identity, or bypass authentication in any way.
 >

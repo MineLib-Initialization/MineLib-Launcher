@@ -1,0 +1,7 @@
+{
+  "server": "your-server-host-or-ip",
+  "user": "deploy-user",
+  "target": "/path/to/site/root",
+  "key": "C:\\Users\\you\\.ssh\\your-deploy-key",
+  "siteRoot": "C:\\path\\to\\site-repo"
+}

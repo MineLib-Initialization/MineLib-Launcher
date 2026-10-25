@@ -10,3 +10,11 @@ clientid.txt
 # 发布产物
 publish/
 *.zip
+
+# 本机发布配置与密钥：只放 %USERPROFILE%.minelib，永远不要提交
+deploy.local.json
+release.local.json
+*.local.ps1
+*.pem
+*.key
+*.pfx

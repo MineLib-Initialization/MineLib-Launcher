@@ -1,20 +1,46 @@
 ﻿<#
   MineLib release: bump version -> publish -> zip -> delta patch -> upload -> manifests -> deploy -> commit
-  Usage: powershell -ExecutionPolicy Bypass -File .\release.ps1 -Version 0.5.0 -Notes "..." [-SkipDeploy]
+
+  Usage: powershell -ExecutionPolicy Bypass -File .\release.ps1 -Version 0.5.0 -Notes "..."
+
+  发布目标（服务器 / 账号 / 路径 / 部署密钥 / 站点目录）**不写在仓库里**：
+    %USERPROFILE%\.minelib\deploy.json
+  格式见 release.local.example.json。没有这个文件、或者没有对应的私钥，脚本会在上传前就停下，
+  别人拿到这个仓库也推不到我的服务器（上传靠 SSH 私钥，私钥只在发布机上）。
+
+  [-SkipDeploy] 只发 GitHub Release，不部署站点；[-DryRun] 只打印将要做什么，什么都不发。
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Version,
   [string]$Notes = "",
-  [string]$SiteRoot = 'D:\dsh_Workspaces\Download\mclib',
-  [string]$Server = '38.95.75.199',
-  [string]$Key = "$env:USERPROFILE\.ssh\mclib_deploy",
+  [string]$SiteRoot = "",
+  [string]$Server = "",
+  [string]$User = "",
+  [string]$Target = "",
+  [string]$Key = "",
   [string]$SigningKey = "$env:USERPROFILE\.minelib\release-key.xml",
   [switch]$SkipDeploy,
-  [switch]$InitSigningKey
+  [switch]$InitSigningKey,
+  [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# ── 本机发布配置（不进仓库）──────────────────────────────────────────────
+$deployCfgPath = Join-Path $env:USERPROFILE '.minelib\deploy.json'
+if (Test-Path $deployCfgPath) {
+  try { $deployCfg = Get-Content $deployCfgPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $deployCfg = $null }
+  if ($deployCfg) {
+    if (-not $SiteRoot -and $deployCfg.siteRoot) { $SiteRoot = [string]$deployCfg.siteRoot }
+    if (-not $Server -and $deployCfg.server) { $Server = [string]$deployCfg.server }
+    if (-not $User -and $deployCfg.user) { $User = [string]$deployCfg.user }
+    if (-not $Target -and $deployCfg.target) { $Target = [string]$deployCfg.target }
+    if (-not $Key -and $deployCfg.key) { $Key = [string]$deployCfg.key }
+  }
+}
+if (-not $Key) { $Key = Join-Path $env:USERPROFILE '.ssh\mclib_deploy' }
+if (-not $SiteRoot) { $SiteRoot = Join-Path (Split-Path -Parent $root) 'mclib' }
 $pub = Join-Path $root 'bin\Release\net8.0-windows\win-x64\publish'
 $zip = Join-Path $env:TEMP 'MineLibLauncher-win-x64.zip'
 $patchFile = Join-Path $env:TEMP 'MineLibLauncher-patch.bin'
@@ -41,6 +67,26 @@ if ($InitSigningKey) {
   Write-Host ('    私钥已写入：' + $SigningKey)
   Write-Host '    把下面这行公钥填进 Core\ManifestSign.cs 的 PublicKeyBase64：'
   Write-Host ('    ' + $pubText)
+  exit 0
+}
+
+# ── 发布目标与密钥的硬门槛：缺任何一项都在上传前停下 ──────────────────────
+if (-not $SkipDeploy) {
+  if ([string]::IsNullOrWhiteSpace($Server)) {
+    throw ('没有配置发布目标：' + $deployCfgPath + '（需要 server / user / target）。' +
+           '别人拿到本仓库也推不到我的服务器，因为上传还要 SSH 私钥。')
+  }
+  if (-not (Test-Path $Key)) {
+    throw ('找不到部署私钥：' + $Key + '。上传需要私钥，仓库里不含任何密钥。')
+  }
+  Write-Host ("发布目标：" + $User + "@" + $Server + "  → " + $Target)
+} else {
+  Write-Host '本次跳过站点部署（-SkipDeploy）'
+}
+if ($DryRun) {
+  Write-Host ('[DryRun] 版本 ' + $Version + '，站点目录 ' + $SiteRoot)
+  Write-Host ('[DryRun] 上传会用：' + $Key + ' → ' + $(if ($SkipDeploy) { '（不部署）' } else { $User + '@' + $Server + ':' + $Target }))
+  Write-Host '[DryRun] 到此为止，什么都没有发布'
   exit 0
 }
 
@@ -106,20 +152,20 @@ for ($i = 0; $i -lt $n; $i++) {
 }
 $procs = @()
 for ($i = 0; $i -lt $n; $i++) {
-  $cmd = '/c ssh -i "' + $Key + '" -o StrictHostKeyChecking=no mclib@' + $Server + ' "cat > /tmp/mlpart' + $i + '.bin" < "' + $parts[$i] + '"'
+  $cmd = '/c ssh -i "' + $Key + '" -o StrictHostKeyChecking=accept-new ' + $User + '@' + $Server + ' "cat > /tmp/mlpart' + $i + '.bin" < "' + $parts[$i] + '"'
   $procs += Start-Process -FilePath $env:ComSpec -ArgumentList $cmd -NoNewWindow -PassThru
 }
 $procs | ForEach-Object { $_.WaitForExit() }
-$remote = 'mclib@' + $Server
-ssh -i $Key -o StrictHostKeyChecking=no $remote "cat /tmp/mlpart0.bin /tmp/mlpart1.bin /tmp/mlpart2.bin /tmp/mlpart3.bin > /www/wwwroot/mclib/launcher/MineLibLauncher-win-x64.zip && rm -f /tmp/mlpart*.bin"
+$remote = $User + '@' + $Server
+ssh -i $Key -o StrictHostKeyChecking=accept-new $remote "cat /tmp/mlpart0.bin /tmp/mlpart1.bin /tmp/mlpart2.bin /tmp/mlpart3.bin > $Target/launcher/MineLibLauncher-win-x64.zip && rm -f /tmp/mlpart*.bin"
 if ($LASTEXITCODE -ne 0) { throw 'remote reassemble failed' }
 $parts | ForEach-Object { Remove-Item $_ -Force -ErrorAction SilentlyContinue }
 
 if ($patchOk) {
-  scp -i $Key -o StrictHostKeyChecking=no $patchFile ($remote + ':/www/wwwroot/mclib/launcher/MineLibLauncher-patch.bin')
+  scp -i $Key -o StrictHostKeyChecking=accept-new $patchFile ($remote + ':' + $Target + '/launcher/MineLibLauncher-patch.bin')
   if ($LASTEXITCODE -ne 0) { throw 'patch upload failed' }
 }
-$remoteSum = ssh -i $Key -o StrictHostKeyChecking=no $remote "sha256sum /www/wwwroot/mclib/launcher/MineLibLauncher-win-x64.zip | cut -d' ' -f1"
+$remoteSum = ssh -i $Key -o StrictHostKeyChecking=accept-new $remote "sha256sum $Target/launcher/MineLibLauncher-win-x64.zip | cut -d' ' -f1"
 if ($remoteSum.Trim() -ne $sha) { throw ('remote sha mismatch: ' + $remoteSum) }
 Write-Host '    remote sha ok'
 
