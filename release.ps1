@@ -41,7 +41,7 @@ if (Test-Path $deployCfgPath) {
 }
 if (-not $Key) { $Key = Join-Path $env:USERPROFILE '.ssh\mclib_deploy' }
 if (-not $SiteRoot) { $SiteRoot = Join-Path (Split-Path -Parent $root) 'mclib' }
-$pub = Join-Path $root 'bin\Release\net8.0-windows\win-x64\publish'
+$pub = Join-Path $root 'bin\Release\net9.0-windows\win-x64\publish'
 $zip = Join-Path $env:TEMP 'MineLibLauncher-win-x64.zip'
 $patchFile = Join-Path $env:TEMP 'MineLibLauncher-patch.bin'
 $baseDir = Join-Path $env:LOCALAPPDATA 'MineLib\release'
@@ -57,7 +57,7 @@ Write-Host "0/8 签名私钥：$SigningKey"
 
 # 首次发布前初始化签名密钥（私钥留本机，公钥要写进 Core\ManifestSign.cs）
 if ($InitSigningKey) {
-  $devExe = Join-Path $root 'bin\Release\net8.0-windows\MineLibLauncher.exe'
+  $devExe = Join-Path $root 'bin\Release\net9.0-windows\MineLibLauncher.exe'
   if (-not (Test-Path $devExe)) { throw '先 dotnet build -c Release，再初始化签名密钥' }
   if (Test-Path $SigningKey) { throw ('私钥已存在，不覆盖：' + $SigningKey) }
   $pubFile = Join-Path $env:TEMP 'minelib-pubkey.txt'

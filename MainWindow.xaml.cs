@@ -63,11 +63,14 @@ public partial class MainWindow : Window
 
     private const double ShellRadius = 10;
 
+    /// <summary>系统已经帮我们画圆角了（Win11），就别再自己裁 —— 两套圆角叠在一起会露出缝。</summary>
+    private bool _dwmRounded;
+
     private void OnShellSizeChanged(object sender, SizeChangedEventArgs e)
     {
         // Border 的圆角只裁自己的背景，不裁子元素；子元素（标题栏、侧栏）是直角矩形，
         // 所以这里显式给一层圆角矩形裁剪，否则四个角会被子元素盖成直角。
-        if (WindowState == WindowState.Maximized)
+        if (WindowState == WindowState.Maximized || _dwmRounded)
         {
             RootBorder.Clip = null;
             return;
@@ -81,8 +84,13 @@ public partial class MainWindow : Window
         // 无边框窗口最大化时会盖住任务栏、边缘也会溢出屏幕，用一层边距补回来
         RootBorder.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
         var maxed = WindowState == WindowState.Maximized;
-        RootBorder.CornerRadius = maxed ? new CornerRadius(0) : new CornerRadius(ShellRadius);
-        RootBorder.Clip = maxed || RootBorder.ActualWidth <= 0
+        // 系统圆角生效时（Win11）保持直角 + 无描边，避免和内层圆角对不齐
+        RootBorder.CornerRadius = maxed || _dwmRounded ? new CornerRadius(0) : new CornerRadius(ShellRadius);
+        RootBorder.BorderThickness = maxed || _dwmRounded ? new Thickness(0) : new Thickness(1);
+        RootBorder.BorderBrush = _dwmRounded
+            ? System.Windows.Media.Brushes.Transparent
+            : (System.Windows.Media.Brush)FindResource("BorderStrong");
+        RootBorder.Clip = maxed || _dwmRounded || RootBorder.ActualWidth <= 0
             ? null
             : new System.Windows.Media.RectangleGeometry(
                 new Rect(0, 0, RootBorder.ActualWidth, RootBorder.ActualHeight), ShellRadius, ShellRadius);
@@ -96,6 +104,12 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         VersionList.ItemsSource = _view;
+        // Win11 交给系统画圆角（顺便拿到系统阴影），Win10 仍自己裁
+        SourceInitialized += (_, _) =>
+        {
+            _dwmRounded = MineLib.Core.WindowFx.ApplyDwmChrome(this);
+            UpdateWindowChrome();
+        };
         // Esc 关掉界面内确认卡片（系统对话框那套键位习惯保留）
         PreviewKeyDown += (_, e) =>
         {
@@ -232,8 +246,11 @@ public partial class MainWindow : Window
                 foreach (var p in new FrameworkElement[] { PaneClient, PaneDownload, PaneAccount, PaneSettings })
                     p.Visibility = Visibility.Visible;
                 UpdateLayout();
-                // 恢复成当前选中的页签（--shot 可能已经切到别的页了）
-                ShowPane(_pane);
+                // 恢复成当前选中的页签（--shot 可能已经切到别的页了）。
+                // 这里刚把所有面板都显示出来，必须先清掉记录，否则会因为"已经是当前页"而跳过折叠。
+                var keep = _pane;
+                _pane = "";
+                ShowPane(keep);
             }
             catch (Exception) { }
 
@@ -1150,6 +1167,7 @@ public partial class MainWindow : Window
         try { NoticeStripe.Background = (System.Windows.Media.Brush)FindResource(colorKey); }
         catch (Exception) { }
         NoticeBar.Visibility = Visibility.Visible;
+        AnimateToastIn();
         try { _noticeCts?.Cancel(); } catch (Exception) { }
         if (seconds <= 0) return;
         var cts = new CancellationTokenSource();
@@ -1181,6 +1199,7 @@ public partial class MainWindow : Window
         BtnAskCancel.Content = cancel ?? "";
         BtnAskCancel.Visibility = string.IsNullOrEmpty(cancel) ? Visibility.Collapsed : Visibility.Visible;
         AskLayer.Visibility = Visibility.Visible;
+        AnimateAskIn();
         _askTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var tcs = _askTcs;
         try
@@ -1200,6 +1219,63 @@ public partial class MainWindow : Window
         var tcs = _askTcs;
         _askTcs = null;
         tcs?.TrySetResult(result);
+    }
+
+    /// <summary>系统关掉了动画（辅助功能/低性能设备）时直接跳过，别硬做。</summary>
+    private static bool MotionEnabled => SystemParameters.ClientAreaAnimation &&
+                                         SystemParameters.MinimizeAnimation;
+
+    private static System.Windows.Media.Animation.CubicEase EaseOut => new()
+    { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
+
+    /// <summary>提示条：淡入 + 从下方 8px 滑上来。</summary>
+    private void AnimateToastIn()
+    {
+        if (!MotionEnabled) { NoticeBar.Opacity = 1; return; }
+        try
+        {
+            var slide = NoticeBar.RenderTransform as System.Windows.Media.TranslateTransform;
+            if (slide is null)
+            {
+                slide = new System.Windows.Media.TranslateTransform();
+                NoticeBar.RenderTransform = slide;
+            }
+            NoticeBar.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1,
+                TimeSpan.FromMilliseconds(180)) { EasingFunction = EaseOut });
+            slide.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(10, 0, TimeSpan.FromMilliseconds(220))
+                { EasingFunction = EaseOut });
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>确认卡片：遮罩淡入 + 卡片从 0.97 放大到 1。</summary>
+    private void AnimateAskIn()
+    {
+        if (!MotionEnabled) { AskLayer.Opacity = 1; return; }
+        try
+        {
+            var card = AskLayer.Children.Count > 0 ? AskLayer.Children[0] as FrameworkElement : null;
+            AskLayer.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1,
+                TimeSpan.FromMilliseconds(140)) { EasingFunction = EaseOut });
+            if (card is not null)
+            {
+                var scale = card.RenderTransform as System.Windows.Media.ScaleTransform;
+                if (scale is null)
+                {
+                    scale = new System.Windows.Media.ScaleTransform(1, 1);
+                    card.RenderTransformOrigin = new Point(0.5, 0.5);
+                    card.RenderTransform = scale;
+                }
+                scale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty,
+                    new System.Windows.Media.Animation.DoubleAnimation(0.97, 1, TimeSpan.FromMilliseconds(180))
+                    { EasingFunction = EaseOut });
+                scale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty,
+                    new System.Windows.Media.Animation.DoubleAnimation(0.97, 1, TimeSpan.FromMilliseconds(180))
+                    { EasingFunction = EaseOut });
+            }
+        }
+        catch (Exception) { }
     }
 
     private void OnAskOkClick(object sender, RoutedEventArgs e) => CloseAsk(true);
@@ -1865,9 +1941,20 @@ public partial class MainWindow : Window
         else ShowPane("client");
     }
 
+    /// <summary>导航里只有当前页是强调色 + 半粗，其余是次要色。</summary>
+    private void UpdateTabButtonColors(Button active)
+    {
+        foreach (var b in new[] { BtnTabClient, BtnTabDownload, BtnTabAccount, BtnTabSettings })
+        {
+            var on = ReferenceEquals(b, active);
+            b.Foreground = on ? (System.Windows.Media.Brush)FindResource("AccentText")
+                              : (System.Windows.Media.Brush)FindResource("TextDim");
+            b.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
+        }
+    }
+
     private void ShowPane(string id)
     {
-        _pane = id;
         var pane = id switch
         {
             "download" => (FrameworkElement)PaneDownload,
@@ -1883,6 +1970,14 @@ public partial class MainWindow : Window
             _ => BtnTabClient
         };
 
+        // 点的就是当前页：不重放切页动画，否则同一页也会"抖"一下
+        if (id == _pane && pane.Visibility == Visibility.Visible)
+        {
+            UpdateTabButtonColors(button);
+            return;
+        }
+
+        _pane = id;
         foreach (var p in new FrameworkElement[] { PaneClient, PaneDownload, PaneAccount, PaneSettings })
             if (!ReferenceEquals(p, pane)) p.Visibility = Visibility.Collapsed;
 
@@ -1901,14 +1996,7 @@ public partial class MainWindow : Window
         }
         AnimateIn(pane);
         AnimateIndicator(button);
-
-        foreach (var b in new[] { BtnTabClient, BtnTabDownload, BtnTabAccount, BtnTabSettings })
-        {
-            var active = ReferenceEquals(b, button);
-            b.Foreground = active ? (System.Windows.Media.Brush)FindResource("Accent")
-                                  : (System.Windows.Media.Brush)FindResource("TextDim");
-            b.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
-        }
+        UpdateTabButtonColors(button);
 
         if (id == "download" && _official.Count == 0) _ = LoadOfficialAsync();
     }
@@ -1931,19 +2019,19 @@ public partial class MainWindow : Window
             { EasingFunction = ease, FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop });
     }
 
-    /// <summary>底部指示条滑到选中的页签下面。</summary>
+    /// <summary>左侧导航的选中胶囊滑到当前项（纵向）。</summary>
     private void AnimateIndicator(FrameworkElement target)
     {
         try
         {
-            var to = target.TransformToAncestor(TabStripRoot).Transform(new Point(0, 0)).X;
-            TabIndicator.Width = target.ActualWidth;
+            var to = target.TransformToAncestor(TabStripRoot).Transform(new Point(0, 0)).Y;
+            TabIndicator.Height = target.ActualHeight;
             var ease = new System.Windows.Media.Animation.CubicEase
             {
                 EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut
             };
-            TabIndicatorShift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty,
-                new System.Windows.Media.Animation.DoubleAnimation(to, TimeSpan.FromMilliseconds(240))
+            TabIndicatorShift.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(to, TimeSpan.FromMilliseconds(220))
                 { EasingFunction = ease });
         }
         catch (Exception) { }
