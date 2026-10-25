@@ -446,8 +446,22 @@ public partial class App : Application
                 // 禁用只该动"原本启用"的那批；启用则要覆盖全部禁用项（含测试前就禁用的那个）
                 var okBulk = disabledAll == all.Count && enabledAll == disabledAll + 1;
 
+                // 界面显示：禁用项不露出 .disable 后缀，而是 xxx.jar + [已禁用]
+                File.WriteAllText(Path.Combine(work, "Show-Test.jar.disabled"), "x");
+                var shown = ModManager.List(work).FirstOrDefault(m => m.Name.StartsWith("Show-Test", StringComparison.Ordinal));
+                var okDisplay = shown is not null && !shown.Enabled
+                                && shown.DisplayName == "Show-Test.jar"
+                                && shown.DisabledTag == "[已禁用]"
+                                && shown.StateColumn == "";
+                var enabledOne = ModManager.List(work).FirstOrDefault(m => m.Enabled);
+                var okDisplay2 = enabledOne is not null && enabledOne.DisabledTag == ""
+                                 && enabledOne.DisplayName == enabledOne.Name
+                                 && enabledOne.StateColumn == "已启用";
+                sb.AppendLine("显示：禁用项 = " + (shown?.DisplayName ?? "无") + " " + (shown?.DisabledTag ?? "") +
+                              " 判定=" + okDisplay + "；启用项无标记 = " + okDisplay2);
+
                 var ok = okList && okDisable && okDisableTwice && okEnable && okEnableTwice && okLegacy &&
-                         okDup && okUpper && okMissing && okBulk;
+                         okDup && okUpper && okMissing && okBulk && okDisplay && okDisplay2;
                 sb.AppendLine(ok ? "MODMGR SELFTEST PASS" : "MODMGR SELFTEST FAIL");
             }
             catch (Exception ex)
