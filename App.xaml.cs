@@ -117,6 +117,33 @@ public partial class App : Application
             return;
         }
 
+        // 发布工具：校验一份更新清单的签名（线上发布后复核用）
+        var verifyIdx = Array.IndexOf(e.Args, "--verify");
+        if (verifyIdx >= 0)
+        {
+            var report = new StringBuilder();
+            try
+            {
+                var path = e.Args.Length > verifyIdx + 1 ? e.Args[verifyIdx + 1] : "";
+                var manifest = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))
+                    as System.Text.Json.Nodes.JsonObject ?? throw new InvalidOperationException("不是 JSON 对象");
+                var sig = manifest["signature"]?.ToString() ?? "";
+                var ok = ManifestSign.Verify(ManifestSign.CanonicalFrom(manifest), sig);
+                report.AppendLine("VERIFY " + (ok ? "OK" : "FAIL") + " version=" + manifest["version"] +
+                                  " signature=" + (string.IsNullOrEmpty(sig) ? "（缺失）" : "有") +
+                                  " 整包sha256=" + ((manifest["sha256"]?.ToString() ?? "").Length == 64 ? "有" : "缺") +
+                                  " exeSha256=" + (((manifest["exe"]?["sha256"]?.ToString()) ?? "").Length == 64 ? "有" : "缺"));
+            }
+            catch (Exception ex)
+            {
+                report.AppendLine("VERIFY FAIL " + ex.Message);
+            }
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "minelib-verify.txt"), report.ToString());
+            Console.WriteLine(report.ToString().Trim());
+            Shutdown();
+            return;
+        }
+
         // 自检：故意抛异常，验证全局兜底会把崩溃写进日志
         if (e.Args.Contains("--selftest-crash"))
         {

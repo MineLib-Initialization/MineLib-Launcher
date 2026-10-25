@@ -151,7 +151,7 @@ powershell -ExecutionPolicy Bypass -File .\release.ps1 -Version 0.0.0 -InitSigni
 | `--selftest-ui-mods` | 界面接线：临时目录里开窗→选中客户端→切模组页→点禁用/启用→校验磁盘（不碰真实数据） |
 | `--selftest-mrpack [包路径]` | 合成 .mrpack（含跳过项 / 越界路径 / overrides）真实装一遍；给路径则额外解析真实整合包 |
 
-发布工具：`--mkkey <私钥文件>`（生成签名密钥对，公钥打到 stdout）、`--sign <version.json> <私钥文件>`（给清单签名并自检）。
+发布工具：`--mkkey <私钥文件>`（生成签名密钥对，公钥打到 stdout）、`--sign <version.json> <私钥文件>`（给清单签名并自检）、`--verify <version.json>`（校验线上清单签名）。
 
 其它：`--selftest`（加载器/模组接口）、`--selftest-download`（下载测速）、`--selftest-java <主版本>`（自动获取 Java）、`--selftest-create`（装一个客户端到临时目录）、`--selftest-source`（下载源逐项验证）、`--mkpatch <旧exe> <新exe> <补丁>`（生成增量补丁）、`--shot <页签> <查询> <输出.png>`（离屏渲染界面图）。
 
