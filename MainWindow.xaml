@@ -45,7 +45,7 @@
                      VerticalAlignment="Center" />
         </StackPanel>
 
-        <StackPanel Grid.Column="1" Orientation="Horizontal">
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,8,0">
           <Button x:Name="BtnMin" Style="{StaticResource CaptionButton}" Click="OnMinimizeClick"
                   ToolTip="最小化">
             <Rectangle Width="10" Height="1"

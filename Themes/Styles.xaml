@@ -10,20 +10,21 @@
   <BooleanToVisibilityConverter x:Key="BoolToVis" />
 
   <!-- 中性灰底 + 蓝色强调。比上一版整体提亮一档、对比更清晰 -->
-  <Color x:Key="BgColor">#FFF4F5F7</Color>
+  <Color x:Key="BgColor">#FFF3F3F3</Color>
   <Color x:Key="PanelColor">#FFFFFFFF</Color>
-  <Color x:Key="RailColor">#FFFAFBFC</Color>
-  <Color x:Key="BorderColor">#FFE6E8EC</Color>
-  <Color x:Key="BorderStrongColor">#FFD3D7DE</Color>
-  <Color x:Key="TextColor">#FF16181D</Color>
-  <Color x:Key="TextDimColor">#FF565D68</Color>
-  <Color x:Key="TextFaintColor">#FF8A919B</Color>
-  <Color x:Key="AccentColor">#FF3B82F6</Color>
-  <Color x:Key="AccentHoverColor">#FF2563EB</Color>
-  <Color x:Key="AccentSoftColor">#FFEAF2FE</Color>
-  <Color x:Key="AccentTextColor">#FF1B5FD9</Color>
-  <Color x:Key="HoverColor">#FFF1F3F6</Color>
-  <Color x:Key="SelectedColor">#FFE9F0FE</Color>
+  <Color x:Key="RailColor">#FFFAFAFA</Color>
+  <Color x:Key="BorderColor">#FFE5E5E5</Color>
+  <Color x:Key="BorderStrongColor">#FFD6D6D6</Color>
+  <Color x:Key="TextColor">#FF1A1A1A</Color>
+  <Color x:Key="TextDimColor">#FF5C5C5C</Color>
+  <Color x:Key="TextFaintColor">#FF8A8A8A</Color>
+  <!-- Fluent 强调蓝阶：Light2 用作填充，Base/Dark1 做悬停与文字 -->
+  <Color x:Key="AccentColor">#FF2B88D8</Color>
+  <Color x:Key="AccentHoverColor">#FF1F73BF</Color>
+  <Color x:Key="AccentSoftColor">#FFEAF3FC</Color>
+  <Color x:Key="AccentTextColor">#FF0F5FA6</Color>
+  <Color x:Key="HoverColor">#FFF2F2F2</Color>
+  <Color x:Key="SelectedColor">#FFEAF3FC</Color>
   <Color x:Key="OkColor">#FF15803D</Color>
   <Color x:Key="WarnColor">#FFB45309</Color>
   <Color x:Key="ErrColor">#FFC2372C</Color>

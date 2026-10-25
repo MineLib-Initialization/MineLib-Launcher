@@ -246,8 +246,11 @@ public partial class MainWindow : Window
                 foreach (var p in new FrameworkElement[] { PaneClient, PaneDownload, PaneAccount, PaneSettings })
                     p.Visibility = Visibility.Visible;
                 UpdateLayout();
-                // 恢复成当前选中的页签（--shot 可能已经切到别的页了）
-                ShowPane(_pane);
+                // 恢复成当前选中的页签（--shot 可能已经切到别的页了）。
+                // 这里刚把所有面板都显示出来，必须先清掉记录，否则会因为"已经是当前页"而跳过折叠。
+                var keep = _pane;
+                _pane = "";
+                ShowPane(keep);
             }
             catch (Exception) { }
 
@@ -1938,9 +1941,20 @@ public partial class MainWindow : Window
         else ShowPane("client");
     }
 
+    /// <summary>导航里只有当前页是强调色 + 半粗，其余是次要色。</summary>
+    private void UpdateTabButtonColors(Button active)
+    {
+        foreach (var b in new[] { BtnTabClient, BtnTabDownload, BtnTabAccount, BtnTabSettings })
+        {
+            var on = ReferenceEquals(b, active);
+            b.Foreground = on ? (System.Windows.Media.Brush)FindResource("AccentText")
+                              : (System.Windows.Media.Brush)FindResource("TextDim");
+            b.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
+        }
+    }
+
     private void ShowPane(string id)
     {
-        _pane = id;
         var pane = id switch
         {
             "download" => (FrameworkElement)PaneDownload,
@@ -1956,6 +1970,14 @@ public partial class MainWindow : Window
             _ => BtnTabClient
         };
 
+        // 点的就是当前页：不重放切页动画，否则同一页也会"抖"一下
+        if (id == _pane && pane.Visibility == Visibility.Visible)
+        {
+            UpdateTabButtonColors(button);
+            return;
+        }
+
+        _pane = id;
         foreach (var p in new FrameworkElement[] { PaneClient, PaneDownload, PaneAccount, PaneSettings })
             if (!ReferenceEquals(p, pane)) p.Visibility = Visibility.Collapsed;
 
@@ -1974,14 +1996,7 @@ public partial class MainWindow : Window
         }
         AnimateIn(pane);
         AnimateIndicator(button);
-
-        foreach (var b in new[] { BtnTabClient, BtnTabDownload, BtnTabAccount, BtnTabSettings })
-        {
-            var active = ReferenceEquals(b, button);
-            b.Foreground = active ? (System.Windows.Media.Brush)FindResource("AccentText")
-                                  : (System.Windows.Media.Brush)FindResource("TextDim");
-            b.FontWeight = active ? FontWeights.SemiBold : FontWeights.Normal;
-        }
+        UpdateTabButtonColors(button);
 
         if (id == "download" && _official.Count == 0) _ = LoadOfficialAsync();
     }
