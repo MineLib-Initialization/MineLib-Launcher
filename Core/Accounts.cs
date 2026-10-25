@@ -12,13 +12,16 @@ public sealed class Account
     public string Type { get; set; } = "offline";
     public string Name { get; set; } = "";
     public string Uuid { get; set; } = "";
+    [System.Text.Json.Serialization.JsonConverter(typeof(Secrets.ProtectedStringConverter))]
     public string AccessToken { get; set; } = "";
     public string UserType { get; set; } = "legacy";
     public string Xuid { get; set; } = "";
     public string ClientId { get; set; } = "";
     /// <summary>外置登录的 Yggdrasil API 根地址；启动时注入 authlib-injector。</summary>
     public string Authlib { get; set; } = "";
+    [System.Text.Json.Serialization.JsonConverter(typeof(Secrets.ProtectedStringConverter))]
     public string RefreshToken { get; set; } = "";
+    [System.Text.Json.Serialization.JsonConverter(typeof(Secrets.ProtectedStringConverter))]
     public string ClientToken { get; set; } = "";
     public double ExpiresAt { get; set; }
 
@@ -350,21 +353,37 @@ public static class YggdrasilAuth
         };
     }
 
-    /// <summary>本地已经下好的 authlib-injector。拼启动参数时只查本地，别在 UI 线程上发请求。</summary>
+    /// <summary>
+    /// 本地已经下好的 authlib-injector。拼启动参数时只查本地、不发请求，
+    /// 但如果旁边有我们记下的 sha256 sidecar，就顺手校验一次，被换过就删掉当没有。
+    /// </summary>
     public static string FindCachedInjector()
     {
         try
         {
             if (!Directory.Exists(LibDir)) return "";
-            return Directory.EnumerateFiles(LibDir, "authlib-injector-*.jar")
+            var jar = Directory.EnumerateFiles(LibDir, "authlib-injector-*.jar")
                 .OrderByDescending(File.GetLastWriteTimeUtc)
-                .FirstOrDefault() ?? "";
+                .FirstOrDefault();
+            if (jar is null) return "";
+            var expected = ReadSidecar(jar);
+            if (expected is not null && !HashMatches(jar, expected))
+            {
+                LastInjectorProblem = "本地 authlib-injector 校验不符，已删除准备重新下载";
+                TryDeleteFile(jar);
+                TryDeleteFile(jar + ".sha256");
+                return "";
+            }
+            return new FileInfo(jar).Length > 0 ? jar : "";
         }
         catch (Exception)
         {
             return "";
         }
     }
+
+    /// <summary>最近一次 injector 校验/下载的问题（日志与自检用）。</summary>
+    public static string? LastInjectorProblem { get; private set; }
 
     /// <summary>拉 authlib-injector（作者官方 meta，按需下载到本地，不随项目分发）。</summary>
     public static async Task<string> EnsureInjectorAsync(CancellationToken ct = default)
@@ -374,18 +393,93 @@ public static class YggdrasilAuth
         var version = meta["version"]?.ToString() ?? "";
         var url = meta["download_url"]?.ToString();
         if (string.IsNullOrEmpty(url)) throw new AuthException("authlib-injector 元数据缺少下载地址");
+        var expected = ExpectedSha256(meta);
         var dest = Path.Combine(LibDir, $"authlib-injector-{version}.jar");
-        if (File.Exists(dest) && new FileInfo(dest).Length > 0) return dest;
 
-        if (await Http.DownloadAsync(url, dest, null, null, ct).ConfigureAwait(false)) return dest;
-
-        // 主站被墙/临时不可用时，退到作者的 GitHub Release（按版本号拼地址）
-        if (!string.IsNullOrEmpty(version))
+        // 已有缓存：有 hash 就校验，不符删掉重下；没有 hash 只能比版本号（并记一笔）
+        if (File.Exists(dest) && new FileInfo(dest).Length > 0)
         {
+            if (expected is null || HashMatches(dest, expected))
+            {
+                if (expected is not null) WriteSidecar(dest, expected);
+                return dest;
+            }
+            LastInjectorProblem = "缓存里的 authlib-injector 与官方 sha256 不符，已删除重新下载";
+            TryDeleteFile(dest);
+            TryDeleteFile(dest + ".sha256");
+        }
+
+        var ok = await DownloadVerifiedAsync(url, dest, expected, ct).ConfigureAwait(false);
+        if (!ok && !string.IsNullOrEmpty(version))
+        {
+            // 主站被墙/临时不可用时，退到作者的 GitHub Release（按版本号拼地址）
             var alt = "https://github.com/yushijinhun/authlib-injector/releases/download/v" + version +
                       "/authlib-injector-" + version + ".jar";
-            if (await Http.DownloadAsync(alt, dest, null, null, ct).ConfigureAwait(false)) return dest;
+            ok = await DownloadVerifiedAsync(alt, dest, expected, ct).ConfigureAwait(false);
         }
-        throw new AuthException("authlib-injector 下载失败（主站和 GitHub 都试过了），请检查网络。");
+        if (!ok)
+            throw new AuthException("authlib-injector 下载失败（主站和 GitHub 都试过了），请检查网络。");
+        if (expected is not null) WriteSidecar(dest, expected);
+        return dest;
+    }
+
+    /// <summary>下载 + 校验；hash 不符就把文件删掉并返回 false。</summary>
+    private static async Task<bool> DownloadVerifiedAsync(string url, string dest, string? expectedSha256,
+        CancellationToken ct)
+    {
+        if (!await Http.DownloadAsync(url, dest, null, null, ct).ConfigureAwait(false)) return false;
+        if (expectedSha256 is null) return true;
+        if (HashMatches(dest, expectedSha256)) return true;
+        LastInjectorProblem = "下载到的 authlib-injector 与官方 sha256 不符，已删除";
+        TryDeleteFile(dest);
+        return false;
+    }
+
+    /// <summary>
+    /// 从官方 meta 里取 sha256。字段名兼容几种：checksums.sha256 / sha256 / artifact.checksums.sha256，
+    /// 都取不到就返回 null（调用方据此降级，而不是假装校验过）。
+    /// </summary>
+    internal static string? ExpectedSha256(System.Text.Json.Nodes.JsonNode? meta)
+    {
+        if (meta is null) return null;
+        var candidates = new[]
+        {
+            meta["checksums"]?["sha256"]?.ToString(),
+            meta["sha256"]?.ToString(),
+            meta["artifact"]?["checksums"]?["sha256"]?.ToString(),
+            meta["download"]?["checksums"]?["sha256"]?.ToString()
+        };
+        foreach (var c in candidates)
+            if (!string.IsNullOrWhiteSpace(c) && c!.Length == 64 && c.All(Uri.IsHexDigit))
+                return c.ToLowerInvariant();
+        return null;
+    }
+
+    internal static bool HashMatches(string path, string expectedSha256)
+    {
+        try { return string.Equals(Http.Sha256Of(path), expectedSha256.ToLowerInvariant(), StringComparison.Ordinal); }
+        catch (Exception) { return false; }
+    }
+
+    private static string? ReadSidecar(string jar)
+    {
+        try
+        {
+            var side = jar + ".sha256";
+            if (!File.Exists(side)) return null;
+            var text = File.ReadAllText(side).Trim();
+            return text.Length == 64 && text.All(Uri.IsHexDigit) ? text.ToLowerInvariant() : null;
+        }
+        catch (Exception) { return null; }
+    }
+
+    private static void WriteSidecar(string jar, string sha256)
+    {
+        try { File.WriteAllText(jar + ".sha256", sha256.ToLowerInvariant()); } catch (Exception) { }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch (Exception) { }
     }
 }

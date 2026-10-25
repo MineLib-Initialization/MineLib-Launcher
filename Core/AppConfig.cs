@@ -276,8 +276,18 @@ public sealed class AppConfig
                 if (File.Exists(FilePath)) File.Copy(FilePath, FilePath + ".bak", true);
             }
             catch (Exception) { }
-            File.WriteAllText(tmp, JsonSerializer.Serialize(this, JsonOpts));
+            var json = JsonSerializer.Serialize(this, JsonOpts);
+            File.WriteAllText(tmp, json);
             File.Move(tmp, FilePath, true);
+            // 老配置里的令牌是明文：迁移这一次别把明文留在 .bak 里
+            try
+            {
+                var bak = FilePath + ".bak";
+                if (json.Contains(Secrets.Prefix, StringComparison.Ordinal) && File.Exists(bak) &&
+                    !File.ReadAllText(bak).Contains(Secrets.Prefix, StringComparison.Ordinal))
+                    File.WriteAllText(bak, json);
+            }
+            catch (Exception) { }
         }
         catch (Exception)
         {
