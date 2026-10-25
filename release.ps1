@@ -48,6 +48,10 @@ $baseDir = Join-Path $env:LOCALAPPDATA 'MineLib\release'
 $baseExe = Join-Path $baseDir 'base.exe'
 $url = 'https://launcher.endercraft.top/launcher/MineLibLauncher-win-x64.zip'
 $patchUrl = 'https://launcher.endercraft.top/launcher/MineLibLauncher-patch.bin'
+# 版本化地址：发布出去就不动，便于回溯；清单里用它们（老客户端同样按清单里的哈希校验）
+$zipNameVersioned = ''
+$urlVersioned = ''
+$patchUrlVersioned = ''
 
 Write-Host "0/8 签名私钥：$SigningKey"
 
@@ -111,11 +115,19 @@ $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
 $exeSha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
 $exeSize = (Get-Item $exe).Length
 Write-Host ("    zip {0} MB  exe {1} MB" -f [math]::Round($size / 1MB, 1), [math]::Round($exeSize / 1MB, 1))
+# 版本化产物名：一次发布一个名字，之后永不覆盖（方便回溯，也让老客户端拿到的永远是它校验过的那份）
+$zipNameVersioned = 'MineLibLauncher-' + $Version + '-win-x64.zip'
+$urlVersioned = 'https://launcher.endercraft.top/launcher/' + $zipNameVersioned
+$patchUrlVersioned = 'https://launcher.endercraft.top/launcher/MineLibLauncher-patch-' + $Version + '.bin'
 
 Write-Host '4/8 delta patch'
 $patchOk = $false
 $patchSha = ''
 $patchSize = 0
+# 补丁基线版本取自 base.exe 自己的文件版本 —— 不读清单里的 version，
+# 否则同版本重跑发布时会把 patch.from 写成新版本，老客户端就用不上补丁了
+$baseVersion = if (Test-Path $baseExe) { (Get-Item $baseExe).VersionInfo.FileVersion } else { '' }
+if ($baseVersion -and $baseVersion -eq ($Version + '.0')) { $baseVersion = $Version }
 if (Test-Path $baseExe) {
   $baseSha = (Get-FileHash $baseExe -Algorithm SHA256).Hash.ToLower()
   if ($baseSha -ne $exeSha) {
@@ -157,17 +169,19 @@ for ($i = 0; $i -lt $n; $i++) {
 }
 $procs | ForEach-Object { $_.WaitForExit() }
 $remote = $User + '@' + $Server
-ssh -i $Key -o StrictHostKeyChecking=accept-new $remote "cat /tmp/mlpart0.bin /tmp/mlpart1.bin /tmp/mlpart2.bin /tmp/mlpart3.bin > $Target/launcher/MineLibLauncher-win-x64.zip && rm -f /tmp/mlpart*.bin"
+ssh -i $Key -o StrictHostKeyChecking=accept-new $remote "cat /tmp/mlpart0.bin /tmp/mlpart1.bin /tmp/mlpart2.bin /tmp/mlpart3.bin > $Target/launcher/MineLibLauncher-win-x64.zip && cp -f $Target/launcher/MineLibLauncher-win-x64.zip $Target/launcher/$zipNameVersioned && rm -f /tmp/mlpart*.bin"
 if ($LASTEXITCODE -ne 0) { throw 'remote reassemble failed' }
 $parts | ForEach-Object { Remove-Item $_ -Force -ErrorAction SilentlyContinue }
 
 if ($patchOk) {
   scp -i $Key -o StrictHostKeyChecking=accept-new $patchFile ($remote + ':' + $Target + '/launcher/MineLibLauncher-patch.bin')
   if ($LASTEXITCODE -ne 0) { throw 'patch upload failed' }
+  ssh -i $Key -o StrictHostKeyChecking=accept-new $remote "cp -f $Target/launcher/MineLibLauncher-patch.bin $Target/launcher/$(Split-Path -Leaf $patchUrlVersioned)"
+  if ($LASTEXITCODE -ne 0) { throw 'patch versioned copy failed' }
 }
-$remoteSum = ssh -i $Key -o StrictHostKeyChecking=accept-new $remote "sha256sum $Target/launcher/MineLibLauncher-win-x64.zip | cut -d' ' -f1"
+$remoteSum = ssh -i $Key -o StrictHostKeyChecking=accept-new $remote "sha256sum $Target/launcher/$zipNameVersioned | cut -d' ' -f1"
 if ($remoteSum.Trim() -ne $sha) { throw ('remote sha mismatch: ' + $remoteSum) }
-Write-Host '    remote sha ok'
+Write-Host '    remote sha ok（稳定名 + 版本化名 都已上传）'
 
 Write-Host '6/8 manifests + signature'
 $today = (Get-Date).ToString('yyyy-MM-dd')
@@ -176,16 +190,21 @@ $entry = [ordered]@{
   date = $today
   size = $size
   sha256 = $sha
-  url = $url
+  url = $urlVersioned
   notes = $Notes
   exe = [ordered]@{ size = $exeSize; sha256 = $exeSha }
 }
 if ($patchOk) {
-  $entry['patch'] = [ordered]@{
-    from = ([System.IO.File]::ReadAllText((Join-Path $SiteRoot 'launcher\version.json')) | ConvertFrom-Json).version
-    url = $patchUrl
-    size = $patchSize
-    sha256 = $patchSha
+  if ($baseVersion -and $baseVersion -ne $Version) {
+    $entry['patch'] = [ordered]@{
+      from = $baseVersion
+      url = $patchUrlVersioned
+      size = $patchSize
+      sha256 = $patchSha
+    }
+  } else {
+    Write-Host '    补丁基线版本和目标版本相同，本次不带补丁'
+    $patchOk = $false
   }
 }
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -250,8 +269,20 @@ try {
 }
 
 if (-not $SkipDeploy) {
-  Write-Host '7/8 deploy site + commit'
+  Write-Host '7/8 deploy site + verify + commit'
   powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $SiteRoot 'deploy.ps1') | Out-Null
+
+  # 服务器端汇总校验：清单签名 + 所有产物哈希。失败会把线上清单降级成"不更新"，
+  # 这样**不验签的老版本也不会被灌进坏包**（老版本照样会按清单里的 sha256 校验）。
+  $remote = $User + '@' + $Server
+  $verifyOut = ssh -i $Key -o StrictHostKeyChecking=accept-new $remote "bash $Target/launcher/verify-release.sh $Target" 2>&1
+  $verifyCode = $LASTEXITCODE
+  $verifyOut | ForEach-Object { Write-Host ('    ' + $_) }
+  if ($verifyCode -ne 0) {
+    Write-Host '    服务器端校验未通过：线上清单已降级为"不更新"，不再继续发布提交'
+    throw ('server-side verification failed (exit ' + $verifyCode + ')')
+  }
+
   Push-Location $root
   git add -A
   git commit -q -m ('release: v' + $Version)
