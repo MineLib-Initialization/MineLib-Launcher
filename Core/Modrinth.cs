@@ -22,6 +22,16 @@ public sealed class ModHit : System.ComponentModel.INotifyPropertyChanged
 
     public string Meta => string.Join(" · ", new[] { License, Categories }.Where(s => !string.IsNullOrEmpty(s)));
 
+    /// <summary>图标还没到位时垫在底下的首字母。</summary>
+    public string Initial
+    {
+        get
+        {
+            var s = Title.TrimStart();
+            return s.Length == 0 ? "?" : s[..1].ToUpperInvariant();
+        }
+    }
+
     private System.Windows.Media.ImageSource? _icon;
     private bool _iconAsked;
 
@@ -88,6 +98,28 @@ internal static class ModIconCache
     /// <summary>最近一次加载失败的原因（自检与日志用）。</summary>
     internal static string? LastError { get; private set; }
 
+    /// <summary>失败记录：不永久记住失败，隔一会儿还能再试（断网/VPN 恢复后图标能自己回来）。</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> FailedAt =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan RetryAfter = TimeSpan.FromMinutes(3);
+
+    /// <summary>图标落盘目录：解码后的 PNG，重开启动器不必再联网。</summary>
+    internal static string DiskDir => Path.Combine(Paths.ConfigDir, "icons");
+
+    private static string DiskPath(string url)
+    {
+        var hash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(url)))
+            .ToLowerInvariant()[..24];
+        return Path.Combine(DiskDir, hash + ".png");
+    }
+
+    /// <summary>只清内存缓存，磁盘缓存保留（自检用来验证"磁盘命中不联网"）。</summary>
+    internal static void ClearMemory()
+    {
+        lock (Lock) { Cache.Clear(); }
+    }
+
     public static System.Windows.Media.ImageSource? TryGet(string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return null;
@@ -107,17 +139,33 @@ internal static class ModIconCache
     {
         if (string.IsNullOrWhiteSpace(url)) return null;
         if (TryGet(url) is { } cached2) return cached2;
+        if (FailedAt.TryGetValue(url, out var failedAt) && DateTime.UtcNow - failedAt < RetryAfter)
+            return null;                                     // 刚失败过，先别再打网络
         if (!Loading.TryAdd(url, true)) return null;         // 已经在取了
 
         try
         {
+            // 磁盘缓存优先：换网/断网也能出图，还省一次下载
+            var disk = DiskPath(url);
+            if (File.Exists(disk))
+            {
+                try
+                {
+                    var hit = Decode(await File.ReadAllBytesAsync(disk, ct).ConfigureAwait(false));
+                    if (hit is not null)
+                    {
+                        Remember(url, hit);
+                        return hit;
+                    }
+                }
+                catch (Exception) { }
+            }
+
             var bytes = await Http.GetBytesAsync(url, ct).ConfigureAwait(false);
             var img = Decode(bytes);
-            lock (Lock)
-            {
-                if (Cache.Count >= MaxEntries) Cache.Clear();   // 简单粗暴的容量控制
-                Cache[url] = img;
-            }
+            if (img is not null) SaveDisk(disk, bytes);
+            Remember(url, img);
+            FailedAt.TryRemove(url, out _);
             return img;
         }
         catch (OperationCanceledException)
@@ -127,7 +175,7 @@ internal static class ModIconCache
         catch (Exception ex)
         {
             LastError = ex.GetType().Name + ": " + ex.Message;
-            lock (Lock) { Cache[url] = null; }
+            FailedAt[url] = DateTime.UtcNow;                 // 只记时间，不永久判死
             return null;
         }
         finally
@@ -136,8 +184,53 @@ internal static class ModIconCache
         }
     }
 
+    private static void Remember(string url, System.Windows.Media.ImageSource? img)
+    {
+        lock (Lock)
+        {
+            if (Cache.Count >= MaxEntries) Cache.Clear();     // 简单粗暴的容量控制
+            Cache[url] = img;
+        }
+    }
+
+    /// <summary>把解码后的图标存成 PNG，下次直接读盘。</summary>
+    private static void SaveDisk(string path, byte[] original)
+    {
+        try
+        {
+            Directory.CreateDirectory(DiskDir);
+            File.WriteAllBytes(path, ToPng(original) ?? original);
+        }
+        catch (Exception) { }
+    }
+
+    /// <summary>WebP → PNG（WIC 不认 WebP，靠 ImageSharp 转过一手）。</summary>
+    private static byte[]? ToPng(byte[] bytes)
+    {
+        if (!IsWebp(bytes)) return null;
+        try
+        {
+            using var input = new MemoryStream(bytes, false);
+            using var image = SixLabors.ImageSharp.Image.Load(input);
+            using var output = new MemoryStream();
+            image.Save(output, new SixLabors.ImageSharp.Formats.Png.PngEncoder());
+            return output.ToArray();
+        }
+        catch (Exception ex)
+        {
+            LastError = "WebP 解码失败: " + ex.GetType().Name;
+            return null;
+        }
+    }
+
+    private static bool IsWebp(byte[] b) =>
+        b.Length > 12 && b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F' &&
+        b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P';
+
     private static System.Windows.Media.ImageSource? Decode(byte[] bytes)
     {
+        // Modrinth 新项目图标都是 WebP，WIC 解不了，先转成 PNG 再交给 WPF
+        if (IsWebp(bytes) && ToPng(bytes) is { } png) bytes = png;
         try
         {
             using var ms = new MemoryStream(bytes, false);
