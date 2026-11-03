@@ -35,7 +35,14 @@ public partial class MainWindow : Window
     private bool _modInited;
 
 
-    public sealed record OfficialVersion(string Id, string Type, string ReleaseTime);
+    public sealed record OfficialVersion(string Id, string Type, string ReleaseTime)
+    {
+        /// <summary>归类（正式版 / 快照 / 趣味版 / 远古）。</summary>
+        public VersionKind Kind => VersionKinds.Classify(Id, Type);
+
+        /// <summary>列表里显示的中文类型。</summary>
+        public string KindText => VersionKinds.Label(Kind);
+    }
 
     // ---------------------------------------------------------------- 窗口
     private void OnMinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
@@ -2070,7 +2077,7 @@ public partial class MainWindow : Window
             _official = list;
             if (VerTypeCombo.ItemsSource is null)
             {
-                VerTypeCombo.ItemsSource = new[] { "正式版", "快照", "全部" };
+                VerTypeCombo.ItemsSource = VersionKinds.FilterNames;
                 VerTypeCombo.SelectedIndex = 0;
             }
             ApplyOfficialFilter();
@@ -2170,12 +2177,11 @@ public partial class MainWindow : Window
 
     private void ApplyOfficialFilter()
     {
-        var type = (VerTypeCombo.SelectedItem as string) ?? "正式版";
+        var type = (VerTypeCombo.SelectedItem as string) ?? VersionKinds.FilterNames[0];
         var q = (VerSearchBox?.Text ?? "").Trim();
         var view = _official.Where(v =>
         {
-            if (type == "正式版" && v.Type != "release") return false;
-            if (type == "快照" && v.Type == "release") return false;
+            if (type != "全部" && VersionKinds.Label(v.Kind) != type) return false;
             if (q.Length > 0 && v.Id.IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0) return false;
             return true;
         }).ToList();

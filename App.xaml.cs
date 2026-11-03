@@ -1847,6 +1847,87 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 版本归类自检：从官方清单里把愚人节/趣味版本找出来，确认没混进正式版或普通快照
+        if (e.Args.Contains("--selftest-versions"))
+        {
+            var sb = new StringBuilder();
+            try
+            {
+                var manifest = await Http.GetJsonAsync(Installer.ManifestUrl);
+                var rows = new List<(string id, string type, string time)>();
+                if (manifest["versions"] is System.Text.Json.Nodes.JsonArray arr)
+                {
+                    foreach (var node in arr)
+                    {
+                        if (node is not System.Text.Json.Nodes.JsonObject v) continue;
+                        rows.Add((v["id"]?.ToString() ?? "", v["type"]?.ToString() ?? "",
+                            v["releaseTime"]?.ToString() ?? ""));
+                    }
+                }
+
+                var counts = new Dictionary<VersionKind, int>();
+                var fun = new List<(string id, string time)>();
+                var badRelease = new List<string>();
+                var oddSnapshot = new List<string>();
+                foreach (var (id, type, time) in rows)
+                {
+                    var kind = VersionKinds.Classify(id, type);
+                    counts[kind] = counts.GetValueOrDefault(kind) + 1;
+                    var stamp = time.Length >= 10 ? time[..10] : time;
+                    if (kind == VersionKind.Fun) fun.Add((id, stamp));
+                    if (kind == VersionKind.Release &&
+                        !System.Text.RegularExpressions.Regex.IsMatch(id, @"^\d+(\.\d+)+$"))
+                        badRelease.Add(id);
+                    if (type == "snapshot" && kind == VersionKind.Snapshot &&
+                        !System.Text.RegularExpressions.Regex.IsMatch(id,
+                            @"^\d{2}w\d{2}[a-z]$|^\d+(\.\d+)+[-\s]*(Pre-Release|pre|rc|snapshot)[-\s]*\d+$"))
+                        oddSnapshot.Add(id);
+                }
+
+                sb.AppendLine("清单版本数 = " + rows.Count);
+                foreach (var kind in new[]
+                         {
+                             VersionKind.Release, VersionKind.Snapshot, VersionKind.Fun, VersionKind.Ancient
+                         })
+                    sb.AppendLine("  " + VersionKinds.Label(kind) + " = " + counts.GetValueOrDefault(kind));
+                var sum = counts.Values.Sum();
+                sb.AppendLine("四类合计 = " + sum + "（应等于清单版本数）");
+                sb.AppendLine();
+                sb.AppendLine("愚人节/趣味版本（按上线日期）：");
+                foreach (var (id, time) in fun.OrderBy(f => f.time)) sb.AppendLine("  " + time + "  " + id);
+                sb.AppendLine();
+
+                // 愚人节版本都发在 3 月 31 日或 4 月 1 日；别的月份出现说明规则漏了或 Mojang 改了习惯
+                var oddDate = fun.Where(f => !(f.time.EndsWith("-03-31") || f.time.EndsWith("-04-01")))
+                    .ToList();
+                foreach (var (id, time) in oddDate) sb.AppendLine("日期异常：" + id + " " + time);
+                foreach (var id in badRelease) sb.AppendLine("正式版里混入非纯数字版本号：" + id);
+                foreach (var id in oddSnapshot) sb.AppendLine("快照里混入非标准命名：" + id);
+
+                var present = VersionKinds.KnownFunIds
+                    .Where(k => rows.Any(r => string.Equals(r.id, k, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+                var missed = present
+                    .Where(k => !fun.Any(f => string.Equals(f.id, k, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+                foreach (var id in missed) sb.AppendLine("点名清单里的愚人节版本没被归类：" + id);
+                sb.AppendLine("点名清单中出现在官方清单里的 = " + present.Count + " 个：" +
+                              string.Join("、", present));
+
+                var ok = sum == rows.Count && fun.Count > 0 && badRelease.Count == 0 &&
+                         oddSnapshot.Count == 0 && oddDate.Count == 0 && missed.Count == 0;
+                sb.AppendLine(ok ? "VERSIONS SELFTEST PASS" : "VERSIONS SELFTEST FAIL");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("VERSIONS SELFTEST FAIL " + ex.Message);
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-versions.txt"),
+                sb.ToString());
+            Shutdown();
+            return;
+        }
+
         // 下载源自检：分别用官方与镜像走一遍 清单→版本 json→资源→库，结果写临时文件
         if (e.Args.Contains("--selftest-source"))
         {
