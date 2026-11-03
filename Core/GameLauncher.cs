@@ -176,15 +176,25 @@ public static class GameLauncher
                 break;
             case JsonObject obj:
                 if (obj["rules"] is JsonArray && !Installer.RuleAllows(obj)) return;
+                // 带 name 的条目（{"name":"--add-opens","value":[...]}）要把 name 一起发出去，
+                // 多个 value 时每个值前面都要重复一次 name，否则 JVM 会把第二个值当成主类
+                var name = obj["name"]?.GetValue<string>();
                 var value = obj["value"];
                 switch (value)
                 {
                     case JsonValue sv:
+                        if (!string.IsNullOrEmpty(name))
+                            args.Add(Substitute(name, table));
                         args.Add(Substitute(sv.ToString(), table));
                         break;
                     case JsonArray arr:
                         foreach (var item in arr)
-                            if (item is JsonValue iv) args.Add(Substitute(iv.ToString(), table));
+                        {
+                            if (item is not JsonValue iv) continue;
+                            if (!string.IsNullOrEmpty(name))
+                                args.Add(Substitute(name, table));
+                            args.Add(Substitute(iv.ToString(), table));
+                        }
                         break;
                 }
                 break;
