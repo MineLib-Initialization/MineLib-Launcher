@@ -172,6 +172,7 @@ powershell -ExecutionPolicy Bypass -File .\release.ps1 -Version 0.0.0 -InitSigni
 | `--selftest-secrets` | DPAPI 往返、明文迁移、`.bak` 不留明文、坏密文当空令牌不崩 |
 | `--selftest-modmgr` | 模组开关：禁用/启用、重复操作被挡、改名冲突、大小写后缀、`.disabled` 兼容、500 个批量耗时、禁用项的显示名与 `[已禁用]` 标记 |
 | `--selftest-icons` | 模组图标：WebP（ImageSharp 转 PNG）与 PNG 都能解出位图、第二次走磁盘缓存、坏地址可重试 |
+| `--selftest-versions` | 版本归类：从官方清单里列出全部愚人节/趣味版本，四类数量与总数对得上，正式版里没有非数字版本号 |
 | `--selftest-ui-mods` | 界面接线：临时目录里开窗→选中客户端→切模组页→点禁用/启用→校验磁盘（不碰真实数据） |
 | `--selftest-mrpack [包路径]` | 合成 .mrpack（含跳过项 / 越界路径 / overrides）真实装一遍；给路径则额外解析真实整合包 |
 
