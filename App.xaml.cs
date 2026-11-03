@@ -1511,6 +1511,66 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 加载器识别自检：只看版本 json 原文就能分清 Fabric / Quilt / NeoForge / Forge / OptiFine
+        if (e.Args.Contains("--selftest-loaderdetect"))
+        {
+            var sb = new StringBuilder();
+            // 下面这条 NeoForge 片段来自官方 neoforge-21.1.265-installer.jar 里的 version.json：
+            // 它同时带着 net.fabricmc:sponge-mixin（Mixin 依赖）与历史遗留的 net.minecraftforge 路径，
+            // 按模糊子串猜就会认成 Fabric —— 这就是 issue #32。
+            var cases = new (string name, string json, string expect)[]
+            {
+                ("Fabric 版本", "{\"libraries\":[{\"name\":\"net.fabricmc:fabric-loader:0.16.9\"}]}", "Fabric"),
+                ("Quilt 版本", "{\"libraries\":[{\"name\":\"org.quiltmc:quilt-loader:0.27.1\"}]}", "Quilt"),
+                ("NeoForge 版本",
+                    "{\"id\":\"neoforge-21.1.265\",\"mainClass\":\"cpw.mods.bootstraplauncher.BootstrapLauncher\"," +
+                    "\"libraries\":[{\"name\":\"net.fabricmc:sponge-mixin:0.16.4+mixin.0.8.7\"," +
+                    "\"url\":\"https://maven.neoforged.net/releases/net/fabricmc/sponge-mixin/\"}," +
+                    "{\"name\":\"net.neoforged:neoforge:21.1.265:universal\"}," +
+                    "{\"name\":\"net.minecraftforge:unsafe:0.9.2\"}]}", "NeoForge"),
+                ("Forge 1.20 版本",
+                    "{\"libraries\":[{\"name\":\"net.minecraftforge:fmlloader:1.0.20\"}," +
+                    "{\"name\":\"net.minecraftforge:forge:1.20.1-47.2.0:universal\"}]}", "Forge"),
+                ("Forge 1.7.10 版本",
+                    "{\"libraries\":[{\"name\":\"net.minecraftforge:forge:10.13.4.1614-1.7.10\"}," +
+                    "{\"name\":\"net.minecraft:launchwrapper:1.11\"}]}", "Forge"),
+                ("OptiFine 版本", "{\"id\":\"1.20.1-OptiFine_HD_U_I6\",\"libraries\":[]}", "OptiFine"),
+                ("原版版本", "{\"id\":\"1.21.1\",\"libraries\":[{\"name\":\"com.mojang:brigadier:1.0.18\"}]}", "原版")
+            };
+
+            var bad = 0;
+            foreach (var (name, json, expect) in cases)
+            {
+                var got = Versions.DetectLoader(json);
+                var ok = got == expect;
+                if (!ok) bad++;
+                sb.AppendLine((ok ? "OK   " : "FAIL ") + name + "：期望 " + expect + "，实际 " + got);
+            }
+
+            // 允许再传一个真实的 version.json 路径，直接看它被判成什么（排查线上问题时很方便）
+            var idx = Array.IndexOf(e.Args, "--selftest-loaderdetect");
+            if (idx >= 0 && e.Args.Length > idx + 1 && File.Exists(e.Args[idx + 1]))
+            {
+                var path = e.Args[idx + 1];
+                var text = await File.ReadAllTextAsync(path);
+                var kind = Versions.DetectLoader(text);
+                sb.AppendLine("真实文件 " + Path.GetFileName(path) + " → " + kind +
+                              "（" + text.Length + " 字符）");
+                var low = text.ToLowerInvariant();
+                sb.AppendLine("  含 sponge-mixin=" + low.Contains("sponge-mixin") +
+                              " fabric-loader=" + low.Contains("fabric-loader") +
+                              " neoforged=" + low.Contains("neoforged") +
+                              " minecraftforge=" + low.Contains("minecraftforge"));
+                if (Path.GetFileName(Path.GetDirectoryName(path) ?? "").Length > 0 &&
+                    Path.GetFileName(Path.GetDirectoryName(path)!).StartsWith("neoforge",
+                        StringComparison.OrdinalIgnoreCase) && kind != "NeoForge") bad++;
+            }
+            sb.AppendLine(bad == 0 ? "LOADERDETECT SELFTEST PASS" : "LOADERDETECT SELFTEST FAIL " + bad);
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-loaderdetect.txt"),
+                sb.ToString());
+            Shutdown();
+            return;
+        }
         // 加载器自检：Fabric 真装一次 + 安装器结果识别逻辑
         if (e.Args.Contains("--selftest-loader"))
         {

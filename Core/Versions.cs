@@ -144,14 +144,30 @@ public static class Versions
         return loose ?? fallback;
     }
 
-    /// <summary>从版本 json 原文识别加载器。以前是反序列化后再 ToJsonString + ToLowerInvariant，
-    /// 每扫一个版本都要多拷两份几 MB 的字符串，版本一多扫描就很慢。</summary>
+    /// <summary>
+    /// 从版本 json 原文识别加载器。以前是反序列化后再 ToJsonString + ToLowerInvariant，
+    /// 每扫一个版本都要多拷两份几 MB 的字符串，版本一多扫描就很慢。
+    ///
+    /// 这里只认「加载器自己的 artifact」，不要用 fabricmc / forge 这种模糊子串：
+    /// NeoForge 的 json 里带着 <c>net.fabricmc:sponge-mixin</c>（Mixin 依赖），
+    /// 还带着历史遗留的 <c>net.minecraftforge</c> 路径 —— 按子串猜必然把 NeoForge 认成 Fabric
+    /// （issue #32 就是这么来的）。判断顺序也按「越具体越先」，NeoForge 在 Forge 之前。
+    /// </summary>
     public static string DetectLoader(string rawJson)
     {
-        if (rawJson.Contains("fabricmc", StringComparison.OrdinalIgnoreCase)) return "Fabric";
-        if (rawJson.Contains("neoforged", StringComparison.OrdinalIgnoreCase)) return "NeoForge";
-        if (rawJson.Contains("net.minecraftforge", StringComparison.OrdinalIgnoreCase)) return "Forge";
-        if (rawJson.Contains("optifine", StringComparison.OrdinalIgnoreCase)) return "OptiFine";
+        if (string.IsNullOrEmpty(rawJson)) return "原版";
+        bool Has(string marker) => rawJson.Contains(marker, StringComparison.OrdinalIgnoreCase);
+
+        // Quilt / Fabric：各自的 loader artifact
+        if (Has("org.quiltmc:quilt-loader") || Has("quilt-loader")) return "Quilt";
+        if (Has("net.fabricmc:fabric-loader") || Has("fabric-loader")) return "Fabric";
+        // NeoForge：自己的 mod 载入器或 FML；必须排在 Forge 前面（它的 json 里也有 net.minecraftforge）
+        if (Has("net.neoforged:neoforge") || Has("net.neoforged.fancymodloader") ||
+            Has("net.neoforged:fmlloader") || Has("neoforge-")) return "NeoForge";
+        // Forge：fmlloader / forge artifact
+        if (Has("net.minecraftforge:fmlloader") || Has("net.minecraftforge:forge") ||
+            Has("minecraftforge:forge") || Has("net.minecraftforge:launchwrapper")) return "Forge";
+        if (Has("optifine")) return "OptiFine";
         return "原版";
     }
 
