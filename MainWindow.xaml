@@ -533,7 +533,7 @@
                               <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="{Binding Id}" FontWeight="SemiBold" />
-                            <TextBlock Grid.Column="1" Text="{Binding Type}" Style="{StaticResource Faint}"
+                            <TextBlock Grid.Column="1" Text="{Binding KindText}" Style="{StaticResource Faint}"
                                        VerticalAlignment="Center" />
                             <TextBlock Grid.Column="2" Text="{Binding ReleaseTime}" Style="{StaticResource Faint}"
                                        VerticalAlignment="Center" />
