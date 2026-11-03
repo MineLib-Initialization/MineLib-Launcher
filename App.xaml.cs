@@ -1511,6 +1511,45 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        // 加载器版本列表自检：直接调 Loaders.VersionsAsync，看某个加载器在某版本上能拿到哪些构建
+        if (e.Args.Contains("--selftest-loadervers"))
+        {
+            var sb = new StringBuilder();
+            var idx = Array.IndexOf(e.Args, "--selftest-loadervers");
+            var kindName = e.Args.Length > idx + 1 ? e.Args[idx + 1] : "NeoForge";
+            var mc = e.Args.Length > idx + 2 ? e.Args[idx + 2] : "1.21.1";
+            var kind = kindName.ToLowerInvariant() switch
+            {
+                "fabric" => LoaderKind.Fabric,
+                "quilt" => LoaderKind.Quilt,
+                "forge" => LoaderKind.Forge,
+                "liteloader" => LoaderKind.LiteLoader,
+                _ => LoaderKind.NeoForge
+            };
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var list = await Loaders.VersionsAsync(kind, mc, CancellationToken.None);
+                sw.Stop();
+                sb.AppendLine(Loaders.Label(kind) + " / MC " + mc + "：拿到 " + list.Count +
+                              " 个构建，用时 " + sw.Elapsed.TotalSeconds.ToString("0.0") + "s");
+                foreach (var v in list.Take(8)) sb.AppendLine("  " + v.Version + "  " + v.Channel);
+                sb.AppendLine(list.Count > 0 ? "LOADERVERS SELFTEST PASS" : "LOADERVERS SELFTEST FAIL 没有构建");
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                sb.AppendLine(Loaders.Label(kind) + " / MC " + mc + "：失败，用时 " +
+                              sw.Elapsed.TotalSeconds.ToString("0.0") + "s");
+                sb.AppendLine("  " + ex.GetType().Name + "：" + ex.Message);
+                sb.AppendLine("LOADERVERS SELFTEST FAIL");
+            }
+            await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), "minelib-loadervers.txt"),
+                sb.ToString());
+            Shutdown();
+            return;
+        }
+
         // 加载器识别自检：只看版本 json 原文就能分清 Fabric / Quilt / NeoForge / Forge / OptiFine
         if (e.Args.Contains("--selftest-loaderdetect"))
         {
@@ -2094,7 +2133,11 @@ public partial class App : Application
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 var progress = new Progress<InstallProgress>(p => { if (p.Fraction is > 0 and < 1) sb.AppendLine("  " + p.Stage); });
-                var result = await ClientCreator.CreateAsync(cfg, name, mc, loader, 16, "", progress,
+                // Forge / NeoForge 要用 Java 跑官方安装器：这里用探测到的 Java，不然只能测原版 / Fabric
+                var needMajor = mc.StartsWith("1.21") || mc.StartsWith("26.") ? 21 : 17;
+                var java = JavaFinder.Find(cfg.JavaPath, cfg.GameDir, needMajor);
+                sb.AppendLine("Java = " + (string.IsNullOrEmpty(java.exe) ? "未找到" : java.exe + "  " + java.note));
+                var result = await ClientCreator.CreateAsync(cfg, name, mc, loader, 16, java.exe, progress,
                     line => sb.AppendLine("  log: " + line), CancellationToken.None);
                 sw.Stop();
                 sb.AppendLine($"创建成功 root={cfg.GameDir} version={result.VersionId} note={result.Note} 用时={sw.Elapsed.TotalSeconds:0}s");
@@ -2114,6 +2157,9 @@ public partial class App : Application
                 await GameLauncher.PrepareAsync(cfg.GameDir, result.VersionId, merged, 16, null, CancellationToken.None);
                 var (args, _) = GameLauncher.BuildCommand(cfg.GameDir, result.VersionId, merged, acct,
                     javaInfo.exe, 2048, "", cfg.GameDir);
+                // 启动参数逐条落盘，模组加载器（尤其是 NeoForge 的 -p/--add-opens）出问题时有据可查
+                for (var i = 0; i < Math.Min(args.Count, 40); i++)
+                    sb.AppendLine("arg[" + i + "] = " + args[i]);
 
                 var proc = new GameProcess();
                 var lines = new List<string>();

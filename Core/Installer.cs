@@ -433,6 +433,28 @@ public static class Installer
         }
     }
 
+    /// <summary>
+    /// 给一个已经在 versions/ 里的版本补齐客户端、依赖库与资源（加载器版本写好自己的 json 后调用，
+    /// 不用再跑 Java 安装器）。
+    /// </summary>
+    public static async Task EnsureVersionFilesAsync(string gameDir, string vid, int threads,
+        IProgress<InstallProgress>? progress, CancellationToken ct)
+    {
+        var merged = Versions.Resolve(gameDir, vid);
+        progress?.Report(new InstallProgress("下载客户端与依赖库…", 0.02));
+        await Task.WhenAll(
+            EnsureClientAsync(gameDir, vid, merged, null, ct),
+            EnsureLibrariesAsync(gameDir, merged, threads, p =>
+                progress?.Report(new InstallProgress(
+                    $"依赖库 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
+                    0.05 + 0.35 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct)).ConfigureAwait(false);
+        await EnsureAssetsAsync(gameDir, merged, threads, p =>
+            progress?.Report(new InstallProgress(
+                $"资源 {p.FilesDone}/{p.FilesTotal} · {p.SpeedText}",
+                0.4 + 0.6 * p.FilesDone / Math.Max(1, p.FilesTotal))), ct).ConfigureAwait(false);
+        progress?.Report(new InstallProgress("完成", 1.0));
+    }
+
     /// <summary>从头安装一个官方版本到 versions/ 下。</summary>
     public static async Task<string> InstallVersionAsync(string gameDir, string mcver, int threads = 8,
         IProgress<InstallProgress>? progress = null, CancellationToken ct = default)
