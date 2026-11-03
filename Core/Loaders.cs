@@ -362,15 +362,15 @@ public static class Loaders
         if (!await Http.DownloadAsync(first, jar, null, null, ct, 0, second).ConfigureAwait(false))
             throw new InvalidOperationException("NeoForge 安装器下载失败：" + first);
 
-        // 新版的 version.json 是自足的（库地址都是绝对地址、没有 processors），
-        // 直接从安装器 jar 里取出来，把官方 maven 换成能连上的源，剩下的交给启动器自己的下载器 ——
-        // 不用跑 Java 安装器，也就不会卡在安装器自己的下载上。
-        var direct = await TryInstallNeoForgeFromJarAsync(neoforgeVersion, mcForNeo, jar, gameDir,
-                progress, log, ct).ConfigureAwait(false);
-        if (direct is not null) return direct;
-
-        // 老版本（要靠安装器打补丁/跑 processors）还是得跑安装器
-        await RunInstallerAsync(javaExe, jar, new[] { "--installClient", gameDir }, gameDir,
+        // 安装器自己还要下一堆库；官方源不可用时让它也走镜像（支持 --mirror 的版本会生效）
+        var installerArgs = new List<string> { "--installClient", gameDir };
+        if (NeoForgeOfficialDown)
+        {
+            installerArgs.Add("--mirror");
+            installerArgs.Add(NeoForgeMirrorMaven.TrimEnd('/'));
+            log?.Invoke("NeoForge 官方 maven 连不上，安装器改用镜像 " + NeoForgeMirrorMaven);
+        }
+        await RunInstallerAsync(javaExe, jar, installerArgs.ToArray(), gameDir,
             progress, log, ct).ConfigureAwait(false);
 
         var guess = "neoforge-" + neoforgeVersion;
