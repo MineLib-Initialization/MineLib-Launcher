@@ -277,16 +277,13 @@ public static class Versions
             foreach (var section in new[] { "jvm", "game" })
             {
                 var arr = new JsonArray();
-                var seen = new HashSet<string>(StringComparer.Ordinal);
+                // 这里只能按顺序拼接，不能去重：
+                // NeoForge 的 jvm 参数形如 "--add-opens A --add-opens B"，
+                // 一旦把重复的 "--add-opens" 字符串去重掉，B 就会变成主类（启动报找不到主类）。
                 foreach (var src in new[] { result["arguments"] as JsonObject, layer["arguments"] as JsonObject })
                 {
                     if (src?[section] is not JsonArray a) continue;
-                    foreach (var item in a)
-                    {
-                        var clone = item?.DeepClone();
-                        var sig = clone?.ToJsonString() ?? "";
-                        if (seen.Add(sig)) arr.Add(clone);
-                    }
+                    foreach (var item in a) arr.Add(item?.DeepClone());
                 }
                 args[section] = arr;
             }
