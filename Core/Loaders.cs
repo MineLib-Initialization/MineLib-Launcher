@@ -110,23 +110,8 @@ public static class Loaders
                 break;
             }
             case LoaderKind.NeoForge:
-            {
-                var node = await Http.GetJsonAsync(
-                    "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge", ct)
-                    .ConfigureAwait(false);
-                var prefix = NeoPrefix(mc) + ".";
-                if (node["versions"] is JsonArray arr)
-                {
-                    foreach (var v in arr)
-                    {
-                        var ver = v?.ToString() ?? "";
-                        if (!ver.StartsWith(prefix, StringComparison.Ordinal)) continue;
-                        list.Add(new LoaderVersion(ver, ""));
-                    }
-                }
-                list.Reverse();
+                list.AddRange(await NeoForgeVersionsAsync(mc, ct).ConfigureAwait(false));
                 break;
-            }
             case LoaderKind.LiteLoader:
             {
                 var node = await Http.GetJsonAsync("http://dl.liteloader.com/versions/versions.json", ct)
@@ -145,6 +130,139 @@ public static class Loaders
             .ConfigureAwait(false);
         return (node["versions"] as JsonObject)?.Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal)
             .ToList() ?? new List<string>();
+    }
+
+    // NeoForge 官方 maven 在不少网络下连不上（连接超时 15 秒），BMCLAPI 有同样的目录结构，
+    // 连不上时整条链路（版本列表 / 安装器 / 安装器的依赖）都切到镜像，否则 NeoForge 客户端永远装不上。
+    private const string NeoForgeApi =
+        "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge";
+    private const string NeoForgeOfficialMaven = "https://maven.neoforged.net/releases/";
+    private const string NeoForgeMirrorMaven = "https://bmclapi2.bangbang93.com/maven/";
+
+    /// <summary>本进程里 NeoForge 官方源是否已确认连不上（后面就不用每次都白等 15 秒）。</summary>
+    private static bool NeoForgeOfficialDown;
+
+    /// <summary>NeoForge 版本列表：官方优先，连不上就换 BMCLAPI 镜像。</summary>
+    private static async Task<List<LoaderVersion>> NeoForgeVersionsAsync(string mc, CancellationToken ct)
+    {
+        var list = new List<LoaderVersion>();
+        var prefix = NeoPrefix(mc) + ".";
+
+        // 选了 BMCLAPI 下载源的用户，直接走镜像；否则先给官方 6 秒，超时再换（别让用户干等 15 秒）
+        if (!NeoForgeOfficialDown && DownloadSources.Current.Id != "bmclapi")
+        {
+            using var raceCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            raceCts.CancelAfter(TimeSpan.FromSeconds(6));
+            try
+            {
+                var node = await Http.GetJsonAsync(NeoForgeApi, raceCts.Token).ConfigureAwait(false);
+                if (node["versions"] is JsonArray arr)
+                {
+                    foreach (var v in arr)
+                    {
+                        var ver = v?.ToString() ?? "";
+                        if (!ver.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                        list.Add(new LoaderVersion(ver, ""));
+                    }
+                }
+                if (list.Count > 0)
+                {
+                    list.Reverse();     // 官方清单是升序，翻成"新的在前"
+                    return list;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                // 连接超时 / TLS 失败 / 6 秒没回来：后面直接走镜像
+                NeoForgeOfficialDown = true;
+            }
+        }
+
+        var mirror = await Http.GetJsonAsync(
+            "https://bmclapi2.bangbang93.com/neoforge/list/" + Uri.EscapeDataString(mc), ct)
+            .ConfigureAwait(false);
+        if (mirror is JsonArray marr)
+        {
+            foreach (var n in marr)
+            {
+                var ver = n?["version"]?.ToString() ?? "";
+                var mv = n?["mcversion"]?.ToString() ?? "";
+                if (ver.Length == 0) continue;
+                if (mv.Length > 0 && !string.Equals(mv, mc, StringComparison.OrdinalIgnoreCase)) continue;
+                list.Add(new LoaderVersion(ver, ""));
+            }
+            list.Reverse();
+            if (list.Count > 0) NeoForgeOfficialDown = true;
+        }
+        return list;
+    }
+
+
+    /// <summary>
+    /// 新版 NeoForge（1.20.5+）的 version.json 自带全部库地址、没有 processors，
+    /// 直接写进 versions/ 就能用。这里把官方 maven 地址换成能连上的源，然后补齐文件。
+    /// 返回 null 表示这个版本必须跑官方安装器。
+    /// </summary>
+    private static async Task<string?> TryInstallNeoForgeFromJarAsync(string neoforgeVersion, string mc,
+        string jar, string gameDir, IProgress<InstallProgress>? progress, Action<string>? log,
+        CancellationToken ct)
+    {
+        try
+        {
+            var id = "neoforge-" + neoforgeVersion;
+            string? text = null;
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(jar))
+            {
+                var entry = zip.Entries.FirstOrDefault(e =>
+                    string.Equals(e.Name, "version.json", StringComparison.OrdinalIgnoreCase));
+                if (entry is null) return null;
+                using var reader = new StreamReader(entry.Open());
+                text = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
+            }
+            if (string.IsNullOrWhiteSpace(text)) return null;
+
+            var node = JsonNode.Parse(text) as JsonObject;
+            if (node is null) return null;
+            // 有 processors 说明要靠安装器做二次加工（老版本 NeoForge），不接管
+            if (node["processors"] is JsonArray procs && procs.Count > 0) return null;
+
+            // 官方 maven 连不上就整体换镜像：库地址是绝对地址，只能改文本
+            var mirrorUsed = NeoForgeOfficialDown || DownloadSources.Current.Id == "bmclapi";
+            if (mirrorUsed)
+            {
+                text = text!.Replace(NeoForgeOfficialMaven, NeoForgeMirrorMaven,
+                    StringComparison.OrdinalIgnoreCase);
+                node = JsonNode.Parse(text) as JsonObject ?? node;
+                log?.Invoke("NeoForge 库地址已切到镜像 " + NeoForgeMirrorMaven);
+            }
+
+            node["id"] = id;
+            if (string.IsNullOrEmpty(node["inheritsFrom"]?.ToString()) && !string.IsNullOrEmpty(mc))
+                node["inheritsFrom"] = mc;
+
+            var dir = Path.Combine(gameDir, "versions", id);
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(Path.Combine(dir, id + ".json"), node.ToJsonString(), ct)
+                .ConfigureAwait(false);
+            log?.Invoke("已从安装器里取出版本 json：" + id);
+
+            progress?.Report(new InstallProgress("下载 NeoForge 依赖库…", 0.03));
+            await Installer.EnsureVersionFilesAsync(gameDir, id, 16, progress, ct).ConfigureAwait(false);
+            return id;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            log?.Invoke("直接安装 NeoForge 失败，改用官方安装器：" + ex.Message);
+            return null;
+        }
     }
 
     /// <summary>1.21.1 → 21.1，用于把 Minecraft 版本映射到 NeoForge 版本号前缀。</summary>
@@ -169,7 +287,7 @@ public static class Loaders
                 return await InstallForgeAsync(mc, loaderVersion, gameDir, javaExe, progress, log, ct)
                     .ConfigureAwait(false);
             case LoaderKind.NeoForge:
-                return await InstallNeoForgeAsync(loaderVersion, gameDir, javaExe, progress, log, ct)
+                return await InstallNeoForgeAsync(loaderVersion, mc, gameDir, javaExe, progress, log, ct)
                     .ConfigureAwait(false);
             default:
                 return await RunLiteLoaderInstallerAsync(mc, gameDir, javaExe, progress, log, ct)
@@ -228,17 +346,30 @@ public static class Loaders
             "安装器跑完了但没找到它生成的版本目录（期望 " + guess + "），请检查日志。");
     }
 
-    private static async Task<string> InstallNeoForgeAsync(string neoforgeVersion, string gameDir,
+    private static async Task<string> InstallNeoForgeAsync(string neoforgeVersion, string mcForNeo, string gameDir,
         string javaExe, IProgress<InstallProgress>? progress, Action<string>? log, CancellationToken ct)
     {
         var before = SnapshotVersions(gameDir);
-        var url = "https://maven.neoforged.net/releases/net/neoforged/neoforge/" + neoforgeVersion +
-                  "/neoforge-" + neoforgeVersion + "-installer.jar";
+        var path = "net/neoforged/neoforge/" + neoforgeVersion + "/neoforge-" + neoforgeVersion +
+                   "-installer.jar";
+        var official = NeoForgeOfficialMaven + path;
+        var mirror = NeoForgeMirrorMaven + path;
         var jar = Path.Combine(AppConfig.Dir, "installers", $"neoforge-{neoforgeVersion}-installer.jar");
         progress?.Report(new InstallProgress("下载 NeoForge 安装器…", 0.02));
-        if (!await Http.DownloadAsync(url, jar, null, null, ct).ConfigureAwait(false))
-            throw new InvalidOperationException("NeoForge 安装器下载失败：" + url);
+        // 官方连不上就直接走镜像；能连上时镜像只作为兜底
+        var first = NeoForgeOfficialDown ? mirror : official;
+        var second = NeoForgeOfficialDown ? official : mirror;
+        if (!await Http.DownloadAsync(first, jar, null, null, ct, 0, second).ConfigureAwait(false))
+            throw new InvalidOperationException("NeoForge 安装器下载失败：" + first);
 
+        // 新版的 version.json 是自足的（库地址都是绝对地址、没有 processors），
+        // 直接从安装器 jar 里取出来，把官方 maven 换成能连上的源，剩下的交给启动器自己的下载器 ——
+        // 不用跑 Java 安装器，也就不会卡在安装器自己的下载上。
+        var direct = await TryInstallNeoForgeFromJarAsync(neoforgeVersion, mcForNeo, jar, gameDir,
+                progress, log, ct).ConfigureAwait(false);
+        if (direct is not null) return direct;
+
+        // 老版本（要靠安装器打补丁/跑 processors）还是得跑安装器
         await RunInstallerAsync(javaExe, jar, new[] { "--installClient", gameDir }, gameDir,
             progress, log, ct).ConfigureAwait(false);
 
